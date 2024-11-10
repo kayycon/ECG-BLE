@@ -45,12 +45,13 @@
 * Implement functionality to measure a battery voltage (0-3.7 V) using `AIN0`:
   1. When the device first powers on, and then
   1. Every 1 minute thereafter, but only when in the `IDLE` state.
+  1. You won't actually be connecting a battery to your device; you can use a power support or another voltage source to input a voltage to `AIN0` to simulate a battery level.
 * Have the brightness of `LED1` linearly modulated by the percentage of the battery level.
 * Implement functionality to make two measurements after pressing `BUTTON1`:
   1. Read temperature with your MPR9808 sensor (in degrees Celsius).
-  1. Calculate the average heart rate (40-200 BPM) using 25-30 seconds of an ECG signal (ranging from -500--500 mV) from the function generator
+  1. Calculate the average heart rate (40-200 BPM) using 25-30 seconds of an ECG signal (ranging from -500 - 500 mV, note this is bipolar) from the function generator (see video on how to setup the function generator to output an ECG signal).
 * Pressing `BUTTON1` during the measurements should post an error and go to the `ERROR` state.
-* Blink `LED2` at the average heart rate after the measurements are complete.
+* Blink `LED2` with a 25% duty cycle at the average heart rate after the measurements are complete.
 * Have Bluetooth notifications after the measurements are complete and data have been processed, using the BLE services and characteristics described below.
   * Configure the **DIS (Device Information Service)** to report the device model as your Team Name (come up with something fun).
   * Set the **BAS (Battery Service)** to report the battery level of your device.  (This isn't actually a battery level, but we're using the `AIN0` measurement as a surrogate for a battery level.)
@@ -58,13 +59,13 @@
   * Setup a custom service with the following custom characterisitics:
     * `Temperature` for the I2C temperature sensor data in degrees Celcius.
     * `Error Code` for the error code that caused the device to enter the `ERROR` state.
-* `BUTTON2` should clear a blinking `LED2`, and if `LED2` is not blinking because a measurement hasn't been taken, then it should log a warning (`LOG_WRN()`) as to why it appears nothing happened.
+* `BUTTON2` should clear (turn off) a blinking `LED2`, and if `LED2` is not blinking because a measurement hasn't been taken, then it should log a warning (`LOG_WRN()`) as to why it appears nothing happened.
 * `BUTTON3` should be used to reset the device from the `ERROR` state and return to the `IDLE` state.
 * Use timers, kernel events, work queues, threads and any other Zephyr RTOS features as needed to implement the above functionality.
 
-## BLE Server
+## BLE Server (Mobile App)
 
-Implement Bluetooth connection, notifications and reading to the [nRF Connect](https://www.nordicsemi.com/Products/Development-tools/nrf-connect-for-mobile) mobile app.  
+Your device can connect via BLE to a mobile app called [nRF Connect](https://www.nordicsemi.com/Products/Development-tools/nrf-connect-for-mobile).  This app can be used to read the services and characteristics that your device is advertising.
 
 ## State Diagram
 
@@ -79,9 +80,6 @@ Complete the testing analysis described in [testing/final_project.ipynb](testing
 ## Extra Credit
 
 * :star: Implement signal processing to get the ECG measurement to work on a noisy signal with low-frequency "DC drift".  This will be graded based on the quality of the implementation and the ability to accurately measure the average heart rate.
-* :star: Implement a low-level I2C driver for the MPR9808 temperature sensor.  This does not mean using the Zephyr I2C driver, but rather implementing the I2C communication protocol yourself.  This will be graded based on the quality of the implementation and the ability to read the temperature sensor data, which you can verify using the `SENSOR` implementation.  **You are not allowed to just reverse engineer the Zephyr I2C driver or use CoPilot or another AI tool to generate the driver.  You must do this based on the datasheet for this sensor.**
-
-*See what these extra credit opportunities can do for your grade below!*
 
 ## Grading
 
@@ -91,9 +89,10 @@ Complete the testing analysis described in [testing/final_project.ipynb](testing
 * Code organization and coding best practices will be graded.
 * State diagram will be graded based on completeness, accuracy and ease of interpretation.
 * Testing and analysis technical report will be graded based on presentation, completeness, and accuracy.
-* Extra credit will only be considered after all required functionality is implemented and working correctly.
-  * Getting the ECG measurement to work on a noisy signal with low-frequency "DC drift" will forgive all late penalties for labs this semester.  (Applies to all team members.)
-  * Implementing an I2C low-level driver for the temperature sensor allow the final project to count exclusively for your final grade if it is greater than your final grade with the labs.  (Applies to all team members.)
+* Your demo will be graded based on the functionality of your device and your ability to answer questions about your firmware.
+* Extra credit will only be considered after all required functionality is implemented and working correctly.  
+  * Completing the extra credit will forgive some/all late penalties for labs this semester.  (Applies to all team members.)
+  * If you do not have any late penalties, then the extra credit will be added to your final project grade, including going over 100%.
 
 ## What to Submit
 
@@ -101,7 +100,7 @@ Complete the testing analysis described in [testing/final_project.ipynb](testing
 * Create an annotated tag called `v1.0.0` to mark the commit that you want to be graded.  If you fix any bugs after creating this tag, you can create another tag called `v1.0.1`, etc.  Your latest tag will be the one that is graded.
 * Create an Issue in your repository with the title "Final Project Submission", and assign it to Dr. Palmeri.
 * **All repositories will be cloned at the due date/time for grading.  Absolutely no changes will be accepted after this time.**
-* Your team must schedule a time to do a live demo of your device with Dr. Palmeri before the due date of this assignment.  Your team will be asked questions during this demo.
+* **Your team must schedule a time to do a live demo of your device with Dr. Palmeri before the due date of this assignment.  Your team will be asked questions during this demo.**
 
 ## Resources
 
