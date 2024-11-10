@@ -27,6 +27,8 @@
 * Functions should be short and do one thing.  They should return an exit code that is checked in the calling function, indicating success or failure.
 * MACROS!  Avoid hard-coded values in your code.
 * Use libraries for code that could be re-used in other projects.
+* Use the `LOGGING` module to log errors, warnings, information and debug messages.
+* You should not have any compiler/build warnings.
 
 ## Firmware Functional Specifications
 
@@ -46,6 +48,7 @@
 * Implement functionality to make two measurements after pressing `BUTTON1`:
   1. Read temperature with your MPR9808 sensor (in degrees Celsius).
   1. Calculate the average heart rate (40-200 BPM) using 25-30 seconds of an ECG signal (ranging from -500--500 mV) from the function generator
+* Pressing `BUTTON1` during the measurements should post an error and go to the `ERROR` state.
 * Blink `LED2` at the average heart rate after the measurements are complete.
 * Have Bluetooth notifications after the measurements are complete and data have been processed, using the BLE services and characteristics described below.
   * Configure the **DIS (Device Information Service)** to report the device model as your Team Name (come up with something fun).
@@ -54,7 +57,8 @@
   * Setup a custom service with the following custom characterisitics:
     * `Temperature` for the I2C temperature sensor data in degrees Celcius.
     * `Error Code` for the error code that caused the device to enter the `ERROR` state.
-* `BUTTON2` should be used to reset the device from the `ERROR` state and return to the `IDLE` state.
+* `BUTTON2` should clear a blinking `LED2`, and if `LED2` is not blinking because a measurement hasn't been taken, then it should log a warning (`LOG_WRN()`) as to why it appears nothing happened.
+* `BUTTON3` should be used to reset the device from the `ERROR` state and return to the `IDLE` state.
 * Use timers, kernel events, work queues, threads and any other Zephyr RTOS features as needed to implement the above functionality.
 
 ## BLE Server
