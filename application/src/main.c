@@ -8,7 +8,7 @@
 #include <zephyr/smf.h> 
 
 #include "read_temperature_sensor.h"
-//#include "ble-lib.h"
+//#include "ble-lib.h"  // remember to add this to CMakelists.txt
 
 LOG_MODULE_REGISTER(main, LOG_LEVEL_DBG);
 
