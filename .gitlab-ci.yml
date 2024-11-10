@@ -1,0 +1,22 @@
+---
+build:
+  stage: build
+  image: zephyrprojectrtos/ci
+  script:
+      - west init -m https://github.com/nrfconnect/sdk-nrf --mr v2.6.2
+      - west update
+      - west build --build-dir $CI_PROJECT_DIR/build $CI_PROJECT_DIR --pristine --board nrf52833dk_nrf52833 --no-sysbuild -- -DNCS_TOOLCHAIN_VERSION=NONE -DCONF_FILE=$CI_PROJECT_DIR/prj.conf
+
+state_diagram:
+  stage: test
+  script:
+    - |+
+      test -f $CI_PROJECT_DIR/state_diagram.puml
+      test -f $CI_PROJECT_DIR/state_diagram.png
+
+calc_rms_library:
+  stage: test
+  script:
+    - |+
+      test -f $CI_PROJECT_DIR/src/calc_rms.h
+      test -f $CI_PROJECT_DIR/src/calc_rms.c
