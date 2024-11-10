@@ -9,7 +9,8 @@
 #include <zephyr/bluetooth/gatt.h>
 #include <zephyr/bluetooth/hci.h>
 #include <zephyr/settings/settings.h>
-#include <zephyr/bluetooth/services/bas.h>
+#include <zephyr/bluetooth/services/bas.h> // Battery Service
+#include <zephyr/bluetooth/services/hrs.h> // Heart Rate Service
 
 /* UUID of the Remote Service */
 // Project ID: 065 (3rd entry)

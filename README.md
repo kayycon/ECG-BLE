@@ -105,6 +105,5 @@ Complete the testing analysis described in [testing/final_project.ipynb](testing
 ## Resources
 
 ### Heart Rate Service (GATT)
-* https://docs.zephyrproject.org/latest/samples/bluetooth/peripheral_hr/README.html
 * https://github.com/zephyrproject-rtos/zephyr/tree/main/samples/bluetooth/peripheral_hr
 * https://docs.zephyrproject.org/latest/doxygen/html/group__bt__hrs.html
