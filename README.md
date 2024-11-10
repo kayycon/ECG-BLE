@@ -28,7 +28,7 @@
 * MACROS!  Avoid hard-coded values in your code.
 * Use libraries for code that could be re-used in other projects.
 * Use the `LOGGING` module to log errors, warnings, information and debug messages.
-* You should not have any compiler/build warnings.
+* You should not have any compiler/build warnings.  The CI script will build against `v2.6.2` of the Zephyr SDK; using `v2.7.0` will cause build errors related to the SMF module.
 
 ## Firmware Functional Specifications
 
