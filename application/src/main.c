@@ -13,7 +13,6 @@
 LOG_MODULE_REGISTER(main, LOG_LEVEL_DBG);
 
 #define MEASUREMENT_DELAY_MS 1000
-#define NOMINAL_BATTERY_VOLT_MV 3700
 
 // function declarations
 

@@ -33,10 +33,8 @@ int bluetooth_init(struct bt_conn_cb *bt_cb, struct bt_remote_srv_cb *remote_cb)
 uint8_t bluetooth_get_battery_level(void);
 void bluetooth_set_battery_level(int32_t level);
 ssize_t on_write(struct bt_conn *conn, const struct bt_gatt_attr *attr, const void *buf, uint16_t len, uint16_t offset, uint8_t flags);
-ssize_t read_compliance_data_cb(struct bt_conn *conn, const struct bt_gatt_attr *attr, void *buf, uint16_t len, uint16_t offset);
-ssize_t read_pressure_data_cb(struct bt_conn *conn, const struct bt_gatt_attr *attr, void *buf, uint16_t len, uint16_t offset);
+ssize_t read_temperature_data_cb(struct bt_conn *conn, const struct bt_gatt_attr *attr, void *buf, uint16_t len, uint16_t offset);
 ssize_t read_error_cb(struct bt_conn *conn, const struct bt_gatt_attr *attr, void *buf, uint16_t len, uint16_t offset);
-ssize_t read_warn_cb(struct bt_conn *conn, const struct bt_gatt_attr *attr, void *buf, uint16_t len, uint16_t offset);
 void ccc_cfg_changed_cb(const struct bt_gatt_attr *attr, uint16_t value);
 void on_connected(struct bt_conn *conn, uint8_t ret);
 void on_disconnected(struct bt_conn *conn, uint8_t reason);
@@ -48,10 +46,8 @@ extern struct bt_conn *current_conn;
 extern struct bt_conn_cb bluetooth_callbacks;
 extern struct bt_remote_srv_cb remote_service_callbacks;
 extern struct bt_uuid_128 remote_err_uuid;
-extern struct bt_uuid_128 remote_warn_uuid;
 extern struct bt_uuid_128 remote_serv_uuid;
-extern struct bt_uuid_128 remote_compliance_data_uuid;
-extern struct bt_uuid_128 remote_pressure_data_uuid;
+extern struct bt_uuid_128 remote_temperature_data_uuid;
 extern struct bt_uuid_128 remote_msg_uuid;
 
 #endif

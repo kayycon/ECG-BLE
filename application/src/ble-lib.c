@@ -6,12 +6,10 @@ static K_SEM_DEFINE(bt_init_ok, 1, 1);
 
 #define DEVICE_NAME CONFIG_BT_DEVICE_NAME
 #define DEVICE_NAME_LEN (sizeof(DEVICE_NAME)-1)
+#define NOMINAL_BATTERY_VOLT_MV 3700
 
-extern struct Pressure pressure_daPa;
-extern struct Microphone mic_data;
-extern struct Speaker speaker;
+extern int32_t temperature_degC;
 extern struct k_event errors;
-extern struct k_event warnings;
 
 enum bt_data_notifications_enabled notifications_enabled;
 
@@ -30,37 +28,22 @@ static const struct bt_data sd[] = {
 // Project ID: 065 (3rd entry)
 // BLE MFG ID = 0x02DF (4th entry)
 /*  UUID of Data Characteristic  */
-struct bt_uuid_128 remote_compliance_data_uuid = BT_UUID_INIT_128(
+struct bt_uuid_128 remote_temperature_data_uuid = BT_UUID_INIT_128(
     BT_UUID_128_ENCODE(0xe9ea0001, 0xe19b, 0x0065, 0x02DF, 0xc7907585fc48));
-/*  UUID of Pressure Data Characteristic  */
-struct bt_uuid_128 remote_pressure_data_uuid = BT_UUID_INIT_128(
-    BT_UUID_128_ENCODE(0xe9ea0002, 0xe19b, 0x0065, 0x02DF, 0xc7907585fc48));
-/*  UUID of Warnings Characteristic  */
-struct bt_uuid_128 remote_warn_uuid = BT_UUID_INIT_128(
-    BT_UUID_128_ENCODE(0xe9ea0003, 0xe19b, 0x0065, 0x02DF, 0xc7907585fc48));
 /*  UUID of Errors Characteristic  */
 struct bt_uuid_128 remote_err_uuid = BT_UUID_INIT_128(
-    BT_UUID_128_ENCODE(0xe9ea0004, 0xe19b, 0x0065, 0x02DF, 0xc7907585fc48));
+    BT_UUID_128_ENCODE(0xe9ea0002, 0xe19b, 0x0065, 0x02DF, 0xc7907585fc48));
 /*  UUID of Message Characteristic   */
 struct bt_uuid_128 remote_msg_uuid = BT_UUID_INIT_128(
-    BT_UUID_128_ENCODE(0xe9ea0005, 0xe19b, 0x0065, 0x02DF, 0xc7907585fc48));
+    BT_UUID_128_ENCODE(0xe9ea0003, 0xe19b, 0x0065, 0x02DF, 0xc7907585fc48));
+
 /* Setup services */
 BT_GATT_SERVICE_DEFINE(remote_srv,
     BT_GATT_PRIMARY_SERVICE(BT_UUID_REMOTE_SERVICE),
-    BT_GATT_CHARACTERISTIC(&remote_compliance_data_uuid.uuid,
+    BT_GATT_CHARACTERISTIC(&remote_temperature_data_uuid.uuid,
                     BT_GATT_CHRC_READ | BT_GATT_CHRC_NOTIFY,
                     BT_GATT_PERM_READ,
-                    read_compliance_data_cb, NULL, NULL),
-    BT_GATT_CCC(ccc_cfg_changed_cb, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
-    BT_GATT_CHARACTERISTIC(&remote_pressure_data_uuid.uuid,
-                    BT_GATT_CHRC_READ | BT_GATT_CHRC_NOTIFY,
-                    BT_GATT_PERM_WRITE | BT_GATT_PERM_READ,
-                    read_pressure_data_cb, NULL, NULL),
-    BT_GATT_CCC(ccc_cfg_changed_cb, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),        
-    BT_GATT_CHARACTERISTIC(&remote_warn_uuid.uuid,
-                    BT_GATT_CHRC_READ | BT_GATT_CHRC_NOTIFY,
-                    BT_GATT_PERM_WRITE | BT_GATT_PERM_READ,
-                    read_warn_cb, NULL, NULL),
+                    read_temperature_data_cb, NULL, NULL),
     BT_GATT_CCC(ccc_cfg_changed_cb, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
     BT_GATT_CHARACTERISTIC(&remote_err_uuid.uuid,
                     BT_GATT_CHRC_READ | BT_GATT_CHRC_NOTIFY,
@@ -73,6 +56,7 @@ BT_GATT_SERVICE_DEFINE(remote_srv,
                     NULL, on_write, NULL),
     BT_GATT_CCC(ccc_cfg_changed_cb, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
 );
+
 struct bt_conn *current_conn;
 struct bt_conn_cb bluetooth_callbacks = {
     .connected = on_connected,
@@ -95,7 +79,6 @@ void on_connected(struct bt_conn *conn, uint8_t ret)
 {
     if (ret) {
         LOG_ERR("Connection error: %d", ret);
-        k_event_post(&warnings, WBLE_INIT);
         return;
     }
     LOG_INF("BT connected");
@@ -133,17 +116,9 @@ void ccc_cfg_changed_cb(const struct bt_gatt_attr *attr, uint16_t value)
         remote_service_callbacks.notif_changed(notifications_enabled);
     }
 }
-ssize_t read_compliance_data_cb(struct bt_conn *conn, const struct bt_gatt_attr *attr, void *buf, uint16_t len, uint16_t offset)
+ssize_t read_temperature_data_cb(struct bt_conn *conn, const struct bt_gatt_attr *attr, void *buf, uint16_t len, uint16_t offset)
 {
-    return bt_gatt_attr_read(conn, attr, buf, len, offset, &mic_data.env_mV, mic_data.data_sz);
-}
-ssize_t read_pressure_data_cb(struct bt_conn *conn, const struct bt_gatt_attr *attr, void *buf, uint16_t len, uint16_t offset)
-{
-    return bt_gatt_attr_read(conn, attr, buf, len, offset, &pressure_daPa.data, pressure_daPa.data_sz);
-}
-ssize_t read_warn_cb(struct bt_conn *conn, const struct bt_gatt_attr *attr, void *buf, uint16_t len, uint16_t offset)
-{
-    return bt_gatt_attr_read(conn, attr, buf, len, offset, &warnings.events, sizeof(warnings.events));
+    return bt_gatt_attr_read(conn, attr, buf, len, offset, &temperature_degC, sizeof(temperature_degC));
 }
 ssize_t read_error_cb(struct bt_conn *conn, const struct bt_gatt_attr *attr, void *buf, uint16_t len, uint16_t offset)
 {
@@ -210,8 +185,8 @@ uint8_t bluetooth_get_battery_level(void)
 void bluetooth_set_battery_level(int32_t raw_mV)
 {
     LOG_DBG("Raw Battery: %d mV", raw_mV);
-    float nominal_mV = (float)NOMINAL_BATTERY_VOLT_MV;
-    float normalized_level = (float)100.0*((float)raw_mV)/nominal_mV;
+    
+    float normalized_level = (float)raw_mV / NOMINAL_BATTERY_VOLT_MV;
     
     LOG_INF("Normalized Battery Level: %lf", (double)normalized_level);
     int err = bt_bas_set_battery_level((int)normalized_level);
