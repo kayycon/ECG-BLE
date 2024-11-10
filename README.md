@@ -76,13 +76,6 @@ Generate a detailed state diagram that all states, events and actions for your f
 
 Complete the testing analysis described in [testing/final_project.ipynb](testing/final_project.ipynb) to verify the accuracy of your firmware.
 
-* Verify the accuracy of your battery level measurement (`AIN0`) for 0-3 V as read through the nRF Connect app Bluetooth Battery Level GATT.
-* Verify the accuracy of your `AIN1` measurement for 0-3 V as read through the nRF Connect app.
-* Demonstrate that your temperature sensor can have a room temperature measurement read through the nRF Connect app.
-* For a 500 Hz sinusoidal signal with a 1 V DC offset into the differential ADC input (as was used in the ADC lab), demonstrate that the raw data array and the RMS value are accurately read through the nRF Connect app.
-
-Add relevant **Discussion** for any data that do *not* match the expected values.
-
 ## Extra Credit
 
 * :star: Implement signal processing to get the ECG measurement to work on a noisy signal with low-frequency "DC drift".  This will be graded based on the quality of the implementation and the ability to accurately measure the average heart rate.
@@ -108,6 +101,7 @@ Add relevant **Discussion** for any data that do *not* match the expected values
 * Create an annotated tag called `v1.0.0` to mark the commit that you want to be graded.  If you fix any bugs after creating this tag, you can create another tag called `v1.0.1`, etc.  Your latest tag will be the one that is graded.
 * Create an Issue in your repository with the title "Final Project Submission", and assign it to Dr. Palmeri.
 * **All repositories will be cloned at the due date/time for grading.  Absolutely no changes will be accepted after this time.**
+* Your team must schedule a time to do a live demo of your device with Dr. Palmeri before the due date of this assignment.  Your team will be asked questions during this demo.
 
 ## Resources
 
