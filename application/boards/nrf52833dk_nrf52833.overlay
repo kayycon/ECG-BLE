@@ -1,0 +1,18 @@
+/ {
+	aliases {
+        heartbeat = &led0;  // this corresponds to LED1 on the board
+	};
+};
+
+/* I2C Pin Mapping
+SCK: P0.27
+SDA: P0.26
+*/
+&i2c0 {
+    mcp9808@18{
+        compatible = "microchip,mcp9808";
+        reg = <0x18>;
+        status = "okay";
+    };
+
+};
