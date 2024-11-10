@@ -37,11 +37,12 @@
   * Do all device initialization in an `INIT` state.
   * Have an `IDLE` state when the device isn't making any measurements.
   * Have an `ERROR` state if any error exit codes are returned from any functions.
+    * All 4 LEDs should blink at a 50% duty cycle, in-phase with each other, in the `ERROR` state.
     * An error condition should post an error-related event that causes the device to enter the `ERROR` state.
     * The error code should specify the error condition that caused the device to enter the `ERROR` state.  For example, you may choose to have a bit array that can capture multiple error conditions.
     * A BLE notification should be sent with the error code (see BLE custom service/characteristic below).
   * Implement states of your choosing for the following measurements, calculations and BLE communications.
-* Have a heartbeat `LED0` that blinks every 1 second in all states.
+* Have a heartbeat `LED0` that blinks every 1 second with a 50% duty cycle in all states.
 * Implement functionality to measure a battery voltage (0-3.7 V) using `AIN0`:
   1. When the device first powers on, and then
   1. Every 1 minute thereafter, but only when in the `IDLE` state.
