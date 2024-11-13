@@ -83,7 +83,6 @@ void on_connected(struct bt_conn *conn, uint8_t ret)
     }
     LOG_INF("BT connected");
     current_conn = bt_conn_ref(conn);
-    stop_ble_led_timer();
 }
 void on_disconnected(struct bt_conn *conn, uint8_t reason)
 {
@@ -92,17 +91,14 @@ void on_disconnected(struct bt_conn *conn, uint8_t reason)
         bt_conn_unref(current_conn);
         current_conn = NULL;
     }
-    start_ble_led_timer();
 }
 void on_notif_changed(enum bt_data_notifications_enabled status)
 {
     if (status == BT_DATA_NOTIFICATIONS_ENABLED) {
         LOG_INF("BT notifications enabled");
-        stop_ble_led_timer();
     }
     else {
         LOG_INF("BT notifications disabled");
-        start_ble_led_timer();
     }
 }
 const struct bt_gatt_attr *attr = &remote_srv.attrs[2];
@@ -172,7 +168,6 @@ int bluetooth_init(struct bt_conn_cb *bt_cb, struct bt_remote_srv_cb *remote_cb)
         LOG_ERR("Could not start advertising (ret = %d)", ret);
         return ret;
     }
-    start_ble_led_timer();
     return ret;
 }
 uint8_t bluetooth_get_battery_level(void) 
