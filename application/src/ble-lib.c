@@ -1,6 +1,6 @@
 #include "ble-lib.h"
 
-LOG_MODULE_REGISTER(ble-lib, LOG_LEVEL_DBG);
+LOG_MODULE_REGISTER(blelib, LOG_LEVEL_DBG);
 
 // define a semaphore to make sure that bt_init_ok() completes before proceeding
 // this is probably overkill, but it's a good practice
@@ -84,7 +84,7 @@ void on_data_rx(struct bt_conn *conn, const uint8_t *const data, uint16_t len) {
 void on_connected(struct bt_conn *conn, uint8_t ret) {
     if (ret) {
         LOG_ERR("Connection error: %d", ret);
-        return ret;
+        return;
     }
     LOG_INF("BT connected");
     current_conn = bt_conn_ref(conn);
