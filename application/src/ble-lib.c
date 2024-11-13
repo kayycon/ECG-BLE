@@ -2,14 +2,17 @@
 
 LOG_MODULE_REGISTER(ble-lib, LOG_LEVEL_DBG);
 
+// define a semaphore to make sure that bt_init_ok() completes before proceeding
+// this is probably overkill, but it's a good practice
 static K_SEM_DEFINE(bt_init_ok, 1, 1);
 
 #define DEVICE_NAME CONFIG_BT_DEVICE_NAME
 #define DEVICE_NAME_LEN (sizeof(DEVICE_NAME)-1)
-#define NOMINAL_BATTERY_VOLT_MV 3700
+#define NOMINAL_BATTERY_VOLT_MV 3700  // this might make more sense to have in main.c
 
-extern int32_t temperature_degC;
-extern struct k_event errors;
+// extern means this is defined elsewhere (in this case, main.c)
+extern int32_t temperature_degC;  // temperature data characteristic will read from this variable
+extern struct k_event errors; // errors characteristic will read from this variable
 
 enum bt_data_notifications_enabled notifications_enabled;
 
@@ -62,49 +65,50 @@ struct bt_conn_cb bluetooth_callbacks = {
     .connected = on_connected,
     .disconnected = on_disconnected,
 };
+
 struct bt_remote_srv_cb remote_service_callbacks = {
     .notif_changed = on_notif_changed,
     .data_rx = on_data_rx,
 };
+
 /* Callbacks */
-void on_data_rx(struct bt_conn *conn, const uint8_t *const data, uint16_t len)
-{
+void on_data_rx(struct bt_conn *conn, const uint8_t *const data, uint16_t len) {
+    // copy the data to a temporary buffer and append a NULL character
     uint8_t temp_str[len+1];
     memcpy(temp_str, data, len);
     temp_str[len] = 0x00;  // append NULL character at the end
     LOG_INF("BT received data on conn %p. Len: %d", (void *)conn, len);
     LOG_INF("Data: %s", temp_str);
 }
-void on_connected(struct bt_conn *conn, uint8_t ret) 
-{
+
+void on_connected(struct bt_conn *conn, uint8_t ret) {
     if (ret) {
         LOG_ERR("Connection error: %d", ret);
-        return;
+        return ret;
     }
     LOG_INF("BT connected");
     current_conn = bt_conn_ref(conn);
 }
-void on_disconnected(struct bt_conn *conn, uint8_t reason)
-{
+
+void on_disconnected(struct bt_conn *conn, uint8_t reason) {
     LOG_INF("BT disconnected (reason: %d)", reason);
     if (current_conn) {
         bt_conn_unref(current_conn);
         current_conn = NULL;
     }
 }
-void on_notif_changed(enum bt_data_notifications_enabled status)
-{
+
+void on_notif_changed(enum bt_data_notifications_enabled status) {
     if (status == BT_DATA_NOTIFICATIONS_ENABLED) {
         LOG_INF("BT notifications enabled");
-    }
-    else {
+    } else {
         LOG_INF("BT notifications disabled");
     }
 }
+
 const struct bt_gatt_attr *attr = &remote_srv.attrs[2];
-/* Callbacks */
-void ccc_cfg_changed_cb(const struct bt_gatt_attr *attr, uint16_t value)
-{
+
+void ccc_cfg_changed_cb(const struct bt_gatt_attr *attr, uint16_t value) {
     bool notif_enabled = (value == BT_GATT_CCC_NOTIFY);
     LOG_INF("Notifications: %s", notif_enabled? "enabled":"disabled");
     notifications_enabled = notif_enabled? BT_DATA_NOTIFICATIONS_ENABLED:BT_DATA_NOTIFICATIONS_DISABLED;
@@ -112,16 +116,17 @@ void ccc_cfg_changed_cb(const struct bt_gatt_attr *attr, uint16_t value)
         remote_service_callbacks.notif_changed(notifications_enabled);
     }
 }
-ssize_t read_temperature_data_cb(struct bt_conn *conn, const struct bt_gatt_attr *attr, void *buf, uint16_t len, uint16_t offset)
-{
+
+/* These callbacks are used when a read request is made to the remote service */
+ssize_t read_temperature_data_cb(struct bt_conn *conn, const struct bt_gatt_attr *attr, void *buf, uint16_t len, uint16_t offset) {
     return bt_gatt_attr_read(conn, attr, buf, len, offset, &temperature_degC, sizeof(temperature_degC));
 }
-ssize_t read_error_cb(struct bt_conn *conn, const struct bt_gatt_attr *attr, void *buf, uint16_t len, uint16_t offset)
-{
+
+ssize_t read_error_cb(struct bt_conn *conn, const struct bt_gatt_attr *attr, void *buf, uint16_t len, uint16_t offset) {
     return bt_gatt_attr_read(conn, attr, buf, len, offset, &errors.events, sizeof(errors.events));
 }
-ssize_t on_write(struct bt_conn *conn, const struct bt_gatt_attr *attr, const void *buf, uint16_t len, uint16_t offset, uint8_t flags)
-{
+
+ssize_t on_write(struct bt_conn *conn, const struct bt_gatt_attr *attr, const void *buf, uint16_t len, uint16_t offset, uint8_t flags) {
     LOG_INF("Received data, handle %d, conn %p", attr->handle, (void *)conn);
     
     if (remote_service_callbacks.data_rx) {
@@ -129,22 +134,22 @@ ssize_t on_write(struct bt_conn *conn, const struct bt_gatt_attr *attr, const vo
     }
     return len;
 }
-void on_sent(struct bt_conn *conn, void *user_data)
-{
+
+
+void on_sent(struct bt_conn *conn, void *user_data) {
     ARG_UNUSED(user_data);
     LOG_INF("Notification sent on connection %p", (void *)conn);
 }
-void bt_ready(int ret)
-{
+
+void bt_ready(int ret) {
     if (ret) {
         LOG_ERR("bt_enable returned %d", ret);
     }
     // release the thread once initialized
     k_sem_give(&bt_init_ok);
 }
-int bluetooth_init(struct bt_conn_cb *bt_cb, struct bt_remote_srv_cb *remote_cb)
-{
-    int ret;
+
+int bluetooth_init(struct bt_conn_cb *bt_cb, struct bt_remote_srv_cb *remote_cb) {
     LOG_INF("Initializing Bluetooth");
     if ((bt_cb == NULL) | (remote_cb == NULL)) {
         LOG_ERR("Invalid callback(s)");
@@ -153,11 +158,12 @@ int bluetooth_init(struct bt_conn_cb *bt_cb, struct bt_remote_srv_cb *remote_cb)
     bt_conn_cb_register(bt_cb);
     remote_service_callbacks.notif_changed = remote_cb->notif_changed;
     remote_service_callbacks.data_rx = remote_cb->data_rx;
-    ret = bt_enable(bt_ready);
+    int ret = bt_enable(bt_ready);
     if (ret) {
         LOG_ERR("bt_enable returned %d", ret);
         return ret;
     }
+
     // hold the thread until Bluetooth is initialized
     k_sem_take(&bt_init_ok, K_FOREVER);
     if (IS_ENABLED(CONFIG_BT_SETTINGS)) {
@@ -170,15 +176,16 @@ int bluetooth_init(struct bt_conn_cb *bt_cb, struct bt_remote_srv_cb *remote_cb)
     }
     return ret;
 }
-uint8_t bluetooth_get_battery_level(void) 
-{
+
+/* BAS Functions */
+uint8_t bluetooth_get_battery_level(void) {
     uint8_t battery_level;
     battery_level =  bt_bas_get_battery_level();
     LOG_INF("Battery Level: %d pct", battery_level);
     return battery_level;
 }
-void bluetooth_set_battery_level(int32_t raw_mV)
-{
+
+void bluetooth_set_battery_level(int32_t raw_mV) {
     LOG_DBG("Raw Battery: %d mV", raw_mV);
     
     float normalized_level = (float)raw_mV / NOMINAL_BATTERY_VOLT_MV;
