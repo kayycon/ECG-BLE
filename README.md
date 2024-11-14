@@ -37,12 +37,12 @@
   * Do all device initialization in an `INIT` state.
   * Have an `IDLE` state when the device isn't making any measurements.
   * Have an `ERROR` state if any error exit codes are returned from any functions.
-    * All 4 LEDs should blink at a 50% duty cycle, in-phase with each other, in the `ERROR` state.
+    * All 4 LEDs should blink at a 50% duty cycle (`ON:OFF` time), in-phase with each other, in the `ERROR` state.
     * An error condition should post an error-related event that causes the device to enter the `ERROR` state.
     * The error code should specify the error condition that caused the device to enter the `ERROR` state.  For example, you may choose to have a bit array that can capture multiple error conditions.
     * A BLE notification should be sent with the error code (see BLE custom service/characteristic below).
   * Implement states of your choosing for the following measurements, calculations and BLE communications.
-* Have a heartbeat `LED0` that blinks every 1 second with a 50% duty cycle in all states.
+* Have a heartbeat `LED0` that blinks every 1 second with a 50% duty cycle (`ON:OFF` time) in all states.
 * Implement functionality to measure a battery voltage (0-3.7 V) using `AIN0`:
   1. When the device first powers on, and then
   1. Every 1 minute thereafter, but only when in the `IDLE` state.
@@ -52,7 +52,7 @@
   1. Read temperature with your MPR9808 sensor (in degrees Celsius).
   1. Calculate the average heart rate (40-200 BPM) using 25-30 seconds of an ECG signal (ranging from -500 - 500 mV, note this is bipolar) from the function generator (see video on how to setup the function generator to output an ECG signal).
 * Pressing `BUTTON1` during the measurements should post an error and go to the `ERROR` state.
-* Blink `LED2` with a 25% duty cycle at the average heart rate after the measurements are complete.
+* Blink `LED2` with a 25% duty cycle (`ON:OFF` time) at the average heart rate after the measurements are complete.
 * Have Bluetooth notifications after the measurements are complete and data have been processed, using the BLE services and characteristics described below.
   * Configure the **DIS (Device Information Service)** to report the device model as your Team Name (come up with something fun).
   * Set the **BAS (Battery Service)** to report the battery level of your device.  (This isn't actually a battery level, but we're using the `AIN0` measurement as a surrogate for a battery level.)
