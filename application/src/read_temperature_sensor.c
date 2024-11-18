@@ -23,7 +23,7 @@ int read_temperature_sensor(const struct device *temp_sensor, int32_t *temperatu
         return err;
     }
     else {
-        err = sensor_channel_get(temp_sensor, SENSOR_CHAN_PRESS, &sensor_vals);
+        err = sensor_channel_get(temp_sensor, SENSOR_CHAN_AMBIENT_TEMP, &sensor_vals);
         if (err != 0) {
             LOG_ERR("Temperature sensor get(): %d", err);
             return err;
