@@ -196,3 +196,24 @@ void bluetooth_set_battery_level(int32_t raw_mV) {
         LOG_ERR("BAS set error (err = %d)", err);
     }
 }
+
+
+
+int send_BT_notification(struct bt_conn *conn, uint8_t *value, uint16_t length) {
+    if (!conn) {
+        LOG_ERR("Invalid connection");
+        return -EINVAL;
+    }
+
+    struct bt_gatt_notify_params params = {0};
+
+    params.attr = &remote_srv.attrs[2]; // Update index based on your characteristic
+    params.data = value;
+    params.len = length;
+
+    int ret = bt_gatt_notify_cb(conn, &params);
+    if (ret) {
+        LOG_ERR("Failed to send notification: %d", ret);
+    }
+    return ret;
+}
