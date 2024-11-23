@@ -99,13 +99,13 @@ void battery_blink_handler(struct k_timer *battery_blink_timer);
 void out_duration_handler(struct k_timer *out_duration_timer);
 void pwm_led_handler(struct k_timer *pwm_led_timer);
 void temp_read_callback(struct k_timer *temp_read_timer);
-void battery_measure_callback(struct k_timer *battery_timer); 
+void battery_measure_callback(struct k_timer *battery_measure_timer); 
 
 // define timers
 K_TIMER_DEFINE(heartbeat_timer, heartbeat_blink_handler, NULL);
 K_TIMER_DEFINE(temp_read_timer, temp_read_callback, NULL);
 K_TIMER_DEFINE(battery_blink_timer, battery_blink_handler, NULL);
-K_TIMER_DEFINE(battery_timer, battery_measure_callback, NULL);
+K_TIMER_DEFINE(battery_measure_timer, battery_measure_callback, NULL);
 
 
 // initialize GPIO Callback Structs
@@ -306,15 +306,8 @@ static void idle_entry(void *o)
     LOG_INF("Idle Entry State");
 
     // Start the battery timer for 1-minute periodic measurements
-    k_timer_start(&battery_timer, K_NO_WAIT, K_MINUTES(1));
+    k_timer_start(&battery_measure_timer, K_NO_WAIT, K_MINUTES(1));
 
-}
-
-static void idle_exit(void *o) {
-    LOG_INF("Exiting Idle State");
-
-    // Stop the battery measurement timer
-    k_timer_stop(&battery_measure_timer);
 }
 
 
@@ -339,7 +332,10 @@ static void idle_exit(void *o) {
     LOG_INF("Exiting Idle State");
 
     // Stop the battery timer
-    k_timer_stop(&battery_timer);
+    //k_timer_stop(&battery_timer);
+
+    // Stop the battery measurement timer
+    k_timer_stop(&battery_measure_timer);
 }
 
 static void measure_entry(void *o) {
@@ -550,7 +546,75 @@ void battery_blink_handler(struct k_timer *timer_id) {
     LOG_DBG("Battery LED toggled to %s", battery_led_on ? "ON" : "OFF");
 }
 
-/* unable to get current state
+// unable to get current state
+bool is_measuring_battery = false;
+
+void battery_measure_callback(struct k_timer *timer_id) {
+    if (is_measuring_battery) {
+        LOG_DBG("Battery measurement in progress. Skipping this callback.");
+        return;
+    }
+
+    is_measuring_battery = true;
+
+    if (smf_get_current_state(SMF_CTX(&s_obj)) == &states[Idle]) {
+        int32_t voltage_mv = 0;
+
+        int ret = measure_battery_voltage(&vadc_battery, &voltage_mv);
+        if (ret == 0) {
+            LOG_INF("Battery Voltage: %d mV", voltage_mv);
+
+            // Optional: Send BLE notification with battery voltage
+            bluetooth_set_battery_level(voltage_mv);
+
+            // Adjust LED brightness based on battery voltage
+            adjust_led_brightness(&pwm_battery, voltage_mv);
+        } else {
+            LOG_ERR("Failed to measure battery voltage");
+            error_code |= ERROR_ADC_INIT;
+            smf_set_state(SMF_CTX(&s_obj), &states[Error]);
+        }
+    }
+
+    is_measuring_battery = false;
+}
+
+
+/*
+bool is_measuring_battery = false;
+
+void battery_measure_callback(struct k_timer *timer_id) {
+    if (is_measuring_battery) {
+        LOG_DBG("Battery measurement in progress. Skipping this callback.");
+        return;
+    }
+
+    is_measuring_battery = true;
+
+    if (smf_get_current_state(SMF_CTX(&s_obj)) == &states[Idle]) {
+        int32_t voltage_mv = 0;
+
+        int ret = measure_battery_voltage(&vadc_battery, &voltage_mv);
+        if (ret == 0) {
+            LOG_INF("Battery Voltage: %d mV", voltage_mv);
+
+            // Optional: Send BLE notification with battery voltage
+            bluetooth_set_battery_level(voltage_mv);
+
+            // Adjust LED brightness based on battery voltage
+            adjust_led_brightness(&pwm_battery, voltage_mv);
+        } else {
+            LOG_ERR("Failed to measure battery voltage");
+            error_code |= ERROR_ADC_INIT;
+            smf_set_state(SMF_CTX(&s_obj), &states[Error]);
+        }
+    }
+
+    is_measuring_battery = false;
+}
+*/
+
+/*
 void battery_measure_callback(struct k_timer *timer_id) {
     if (smf_get_current_state(SMF_CTX(&s_obj)) == &states[Idle]) { 
         int32_t battery_voltage = 0;
@@ -569,6 +633,7 @@ void battery_measure_callback(struct k_timer *timer_id) {
     }
 } */
 
+/*
 void battery_measure_callback(struct k_timer *timer_id) {
     if (smf_get_current_state(SMF_CTX(&s_obj)) == &states[Idle]) {
         int32_t battery_voltage = 0;
@@ -586,6 +651,7 @@ void battery_measure_callback(struct k_timer *timer_id) {
         }
     }
 }
+*/
 
 
 int measure_battery_voltage(const struct adc_dt_spec *adc, int32_t *voltage_mv) {
@@ -635,6 +701,7 @@ void battery_measure_callback(struct k_timer *timer_id) {
         }
     }
 }
+*/
 
 void adjust_led_brightness(const struct pwm_dt_spec *pwm_led, int32_t voltage_mv) {
     uint32_t duty_cycle = (voltage_mv * 100) / MAX_BATTERY_VOLTAGE_MV; // Scale 0–100%
@@ -647,7 +714,7 @@ void adjust_led_brightness(const struct pwm_dt_spec *pwm_led, int32_t voltage_mv
     }
 }
 
-*/
+
 
 /*
 int measure_battery_voltage(const struct adc_dt_spec *adc, int32_t *voltage_mv) {
