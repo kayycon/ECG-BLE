@@ -105,7 +105,8 @@ void battery_measure_callback(struct k_timer *battery_timer);
 K_TIMER_DEFINE(heartbeat_timer, heartbeat_blink_handler, NULL);
 K_TIMER_DEFINE(temp_read_timer, temp_read_callback, NULL);
 K_TIMER_DEFINE(battery_blink_timer, battery_blink_handler, NULL);
-K_TIMER_DEFINE(battery_timer, NULL, NULL);
+K_TIMER_DEFINE(battery_timer, battery_measure_callback, NULL);
+
 
 // initialize GPIO Callback Structs
 static struct gpio_callback measure_button_cb; // need one per CB
@@ -306,7 +307,16 @@ static void idle_entry(void *o)
 
     // Start the battery timer for 1-minute periodic measurements
     k_timer_start(&battery_timer, K_NO_WAIT, K_MINUTES(1));
+
 }
+
+static void idle_exit(void *o) {
+    LOG_INF("Exiting Idle State");
+
+    // Stop the battery measurement timer
+    k_timer_stop(&battery_measure_timer);
+}
+
 
 static void idle_run(void *o)
 {   
@@ -603,3 +613,69 @@ int measure_battery_voltage(const struct adc_dt_spec *adc, int32_t *voltage_mv) 
     LOG_INF("Battery voltage: %d mV", *voltage_mv);
     return 0;
 }
+
+/*
+void battery_measure_callback(struct k_timer *timer_id) {
+    if (smf_get_current_state(SMF_CTX(&s_obj)) == &states[Idle]) {
+        int32_t voltage_mv = 0;
+
+        int ret = measure_battery_voltage(&vadc_battery, &voltage_mv);
+        if (ret == 0) {
+            LOG_INF("Battery Voltage: %d mV", voltage_mv);
+
+            // Optional: Send BLE notification with battery voltage
+            bluetooth_set_battery_level(voltage_mv); 
+
+            // Adjust LED brightness based on battery voltage
+            adjust_led_brightness(&pwm_battery, voltage_mv);
+        } else {
+            LOG_ERR("Failed to measure battery voltage");
+            error_code |= ERROR_ADC_INIT;
+            smf_set_state(SMF_CTX(&s_obj), &states[Error]);
+        }
+    }
+}
+
+void adjust_led_brightness(const struct pwm_dt_spec *pwm_led, int32_t voltage_mv) {
+    uint32_t duty_cycle = (voltage_mv * 100) / MAX_BATTERY_VOLTAGE_MV; // Scale 0–100%
+    duty_cycle = (duty_cycle * PWM_PERIOD_USEC) / 100; // Convert to PWM period
+
+    if (pwm_set_dt(pwm_led, PWM_PERIOD_USEC, duty_cycle) != 0) {
+        LOG_ERR("Failed to set PWM for battery LED");
+    } else {
+        LOG_DBG("Battery LED brightness set to %d%%", (voltage_mv * 100) / MAX_BATTERY_VOLTAGE_MV);
+    }
+}
+
+*/
+
+/*
+int measure_battery_voltage(const struct adc_dt_spec *adc, int32_t *voltage_mv) {
+    struct adc_sequence sequence = {
+        .channels    = BIT(adc->channel_id),
+        .buffer      = voltage_mv, // Store result directly in voltage_mv
+        .buffer_size = sizeof(*voltage_mv),
+        .resolution  = adc->resolution,
+    };
+
+    if (!device_is_ready(adc->dev)) {
+        LOG_ERR("ADC device not ready");
+        return -ENODEV;
+    }
+
+    int ret = adc_read(adc->dev, &sequence);
+    if (ret != 0) {
+        LOG_ERR("ADC read failed: %d", ret);
+        return ret;
+    }
+
+    // Convert raw ADC value to millivolts
+    *voltage_mv = (*voltage_mv * adc->channel_cfg.reference) / (1 << adc->resolution);
+
+    LOG_INF("Measured Battery Voltage: %d mV", *voltage_mv);
+    return 0;
+}
+*/
+
+
+
