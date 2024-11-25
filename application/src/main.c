@@ -7,6 +7,10 @@
 #include <zephyr/drivers/pwm.h> 
 #include <zephyr/smf.h> 
 #include <math.h>
+#include <zephyr/bluetooth/bluetooth.h>
+#include <zephyr/bluetooth/gatt.h>
+#include <zephyr/settings/settings.h>
+#include <zephyr/bluetooth/services/bas.h> // Battery Service
 
 #include "read_temperature_sensor.h"
 #include "ble-lib.h"
@@ -20,6 +24,9 @@ LOG_MODULE_REGISTER(main, LOG_LEVEL_DBG);
 #define ERROR_THREAD_PRIORITY 5          // Define the thread priority
 #define MAX_BATTERY_VOLTAGE_MV 3700   // Maximum battery voltage in millivolts
 #define PWM_PERIOD_USEC 1000         // PWM period in microseconds (1 kHz frequency)
+#define ECG_SAMPLE_RATE 100 // Sampling rate in Hz
+#define ECG_BUFFER_SIZE (ECG_SAMPLE_RATE * 30) // 30 seconds of data
+#define R_PEAK_THRESHOLD 2000 // Threshold for R peak detection
 
 // ADC Struct Macro
 #define ADC_DT_SPEC_GET_BY_ALIAS(adc_alias)                    \
@@ -39,6 +46,7 @@ K_EVENT_DEFINE(button_events);
 #define CLEAR_BTN_PRESS BIT(1)
 #define RESET_BTN_PRESS BIT(2)
 #define ANY_BTN_PRESS (GET_BTN_PRESS | CLEAR_BTN_PRESS | RESET_BTN_PRESS)
+#define DEBOUNCE_DELAY_MS 50 // Define debounce delay in milliseconds
 
 // error event
 K_EVENT_DEFINE(error_event);
@@ -63,8 +71,13 @@ int32_t temperature_degC;
 int32_t error_code = 0;  // Global variable to store error codes
 // Global variable to store the battery voltage
 int32_t battery_voltage = 0;
+static int16_t ecg_buffer[ECG_BUFFER_SIZE];
+static size_t ecg_index = 0;
+int32_t average_hr = 0; // Global variable to store the average heart rate
+static uint32_t last_press_time = 0; // Variable to store the last press time
 
 int measure_battery_voltage(const struct adc_dt_spec *adc, int32_t *voltage_mv);
+int calculate_average_heart_rate(const struct adc_dt_spec *adc);
 
 // button gpio structs
 const struct gpio_dt_spec measure_button = GPIO_DT_SPEC_GET(DT_ALIAS(measurebutton), gpios);
@@ -100,24 +113,39 @@ void out_duration_handler(struct k_timer *out_duration_timer);
 void pwm_led_handler(struct k_timer *pwm_led_timer);
 void temp_read_callback(struct k_timer *temp_read_timer);
 void battery_measure_callback(struct k_timer *battery_measure_timer); 
+void ecg_sampling_callback(struct k_timer *ecg_sampling_timer);
+void hrate_blink_handler(struct k_timer *hrate_blink_timer);
 
 // define timers
 K_TIMER_DEFINE(heartbeat_timer, heartbeat_blink_handler, NULL);
 K_TIMER_DEFINE(temp_read_timer, temp_read_callback, NULL);
 K_TIMER_DEFINE(battery_blink_timer, battery_blink_handler, NULL);
 K_TIMER_DEFINE(battery_measure_timer, battery_measure_callback, NULL);
-
+K_TIMER_DEFINE(ecg_sampling_timer, ecg_sampling_callback, NULL); // Timer for ECG sampling
+K_TIMER_DEFINE(hrate_blink_timer, hrate_blink_handler, NULL);
 
 // initialize GPIO Callback Structs
 static struct gpio_callback measure_button_cb; // need one per CB
 static struct gpio_callback clear_button_cb;
 static struct gpio_callback reset_button_cb;
 
-
 //Forward declaration of state table
 static const struct smf_state states[];
 const struct smf_state *smf_get_current_state(const struct smf_ctx *ctx);
 void smf_set_state(struct smf_ctx *ctx, const struct smf_state *state);
+
+struct heart_rate_config {
+    int r_peak_threshold; // Threshold for R-peak detection
+    int min_bpm;          // Minimum BPM for valid heart rate
+    int max_bpm;          // Maximum BPM for valid heart rate
+};
+
+// Create a default configuration
+struct heart_rate_config hr_config = {
+    .r_peak_threshold = 200,
+    .min_bpm = 40,
+    .max_bpm = 200,
+};
 
 // define states for state machine (THESE ARE ONLY PLACEHOLDERS)
 enum smf_states{ Init, Idle, Measure, Error };
@@ -170,6 +198,15 @@ static void init_entry(void *o)
     LOG_INF("Init Entry State");
 
     error_code = 0; // Reset any previous error codes
+
+    // Initialize Bluetooth
+    int ret = bluetooth_init(&bluetooth_callbacks, &remote_service_callbacks);
+    if (ret) {
+        LOG_ERR("Bluetooth initialization failed (ret = %d)", ret);
+        smf_set_state(SMF_CTX(&s_obj), &states[Error]);
+        return;
+    }
+    LOG_INF("Bluetooth initialized");
 
     // Start the heartbeat timer (1-second period, 50% duty cycle)
     k_timer_start(&heartbeat_timer, K_NO_WAIT, K_SECONDS(1));
@@ -325,6 +362,18 @@ static void idle_run(void *o)
         smf_set_state(SMF_CTX(&s_obj), &states[Measure]);
     }
 
+    if (s_obj.events & CLEAR_BTN_PRESS) {
+        // Check if LED2 (Heart Rate LED) is blinking
+        if (k_timer_status_get(&hrate_blink_timer) > 0) {
+            // Stop the timer and turn off LED2
+            k_timer_stop(&hrate_blink_timer);
+            gpio_pin_set_dt(&hrate_led, 0);  // Turn off LED2
+            LOG_INF("Heart Rate LED turned off.");
+        } else {
+            // Log a warning if LED2 is not blinking
+            LOG_WRN("Cannot clear LED2: No measurement has been taken.");
+        }
+    }
     
 }
 
@@ -340,11 +389,22 @@ static void idle_exit(void *o) {
 
 static void measure_entry(void *o) {
     LOG_INF("Measure Entry State");
+
+    // Start ECG sampling timer (30 seconds)
+    k_timer_start(&ecg_sampling_timer, K_NO_WAIT, K_SECONDS(30));
 }
 
 static void measure_run(void *o) {
     LOG_INF("Measure Run State");
 
+    // Check for error event
+    if (s_obj.events & ERROR_EVENT) {
+        LOG_ERR("Error detected during measurement. Transitioning to ERROR state.");
+        smf_set_state(SMF_CTX(&s_obj), &states[Error]);
+        return;
+    }
+
+    // Step 1: Read Temperature
     int ret = read_temperature_sensor(temp_sensor, &temperature_degC);
     if (ret != 0) {
         LOG_ERR("Failed to read temperature sensor");
@@ -355,13 +415,50 @@ static void measure_run(void *o) {
 
     LOG_INF("Temperature: %d °C", temperature_degC);
 
-    // Send BLE notification with temperature
-    if (send_BT_notification(current_conn, (uint8_t *)&temperature_degC, sizeof(temperature_degC)) != 0) {
-        LOG_ERR("Failed to send BLE notification");
+    // Send Temperature Notification
+    ret = send_BT_notification(current_conn, (uint8_t *)&temperature_degC, sizeof(temperature_degC));
+    if (ret) {
+        LOG_ERR("Failed to send temperature notification");
+    }
+
+    // Step 2: Calculate Average Heart Rate
+    if (calculate_average_heart_rate(&vadc_hrate) == 0) {
+        LOG_INF("Average Heart Rate calculated successfully.");
+    } else {
+        LOG_ERR("Failed to calculate heart rate");
+        error_code |= ERROR_ADC_INIT;
+        smf_set_state(SMF_CTX(&s_obj), &states[Error]);
+        return;
+    }
+
+    // Step 3: Set Timer for Heart Rate LED Blink
+    if (average_hr > 0) {
+        uint32_t period_ms = 60000 / average_hr;      // Timer period in milliseconds
+        uint32_t on_time_ms = period_ms / 4;         // 25% duty cycle
+
+        k_timer_start(&hrate_blink_timer, K_MSEC(on_time_ms), K_MSEC(period_ms));
+        LOG_INF("Heart Rate LED blink started with %d ms ON time and %d ms period", on_time_ms, period_ms);
+    }
+
+    // Notify Heart Rate via BLE
+    if (current_conn) {
+    int ret = send_BT_notification(current_conn, (uint8_t *)&average_hr, sizeof(average_hr));
+    if (ret) {
+        LOG_ERR("Failed to send heart rate notification (ret = %d)", ret);
+    } else {
+        LOG_INF("Heart rate notification sent: %d BPM", average_hr);
+    }
+    } else {
+    LOG_ERR("No active BLE connection. Heart rate notification skipped.");
     }
 
     // Transition back to IDLE
     smf_set_state(SMF_CTX(&s_obj), &states[Idle]);
+}
+
+static void measure_exit(void *o) {
+    LOG_INF("Exiting Measure State");
+    k_timer_stop(&hrate_blink_timer);  // Stop the Heart Rate LED Blink Timer
 }
 
 
@@ -373,16 +470,27 @@ static void error_entry(void *o) {
     k_timer_start(&battery_blink_timer, K_NO_WAIT, K_MSEC(500));
     k_timer_start(&temp_read_timer, K_NO_WAIT, K_MSEC(500));
 
-    // Send BLE notification with the error code
-    extern int32_t error_code; // Make sure error_code is globally accessible
-    if (send_BT_notification(current_conn, (uint8_t *)&error_code, sizeof(error_code)) != 0) {
-        LOG_ERR("Failed to send BLE notification");
+    // Notify Error Code via BLE
+    int ret = send_BT_notification(current_conn, (uint8_t *)&error_code, sizeof(error_code));
+    if (ret) {
+        LOG_ERR("Failed to send error notification");
     }
 }
 
 static void error_run(void *o)
 {   
     LOG_INF("Error Run State");
+
+    if (s_obj.events & RESET_BTN_PRESS) {
+        LOG_INF("Reset button pressed, resetting device.");
+
+        // Clear error events and reset the error code
+        k_event_set(&errors, 0);
+        error_code = 0;
+
+        // Transition back to the Init state to reinitialize
+        smf_set_state(SMF_CTX(&s_obj), &states[Idle]);
+    }
 }
 
 static void error_exit(void *o) {
@@ -396,7 +504,7 @@ static void error_exit(void *o) {
 static const struct smf_state states[] = {
         [Init] = SMF_CREATE_STATE(init_entry, init_run, init_exit),
         [Idle] = SMF_CREATE_STATE(idle_entry, idle_run, idle_exit),
-        [Measure] = SMF_CREATE_STATE(measure_entry, measure_run, NULL),
+        [Measure] = SMF_CREATE_STATE(measure_entry, measure_run, measure_exit),
         [Error] = SMF_CREATE_STATE(error_entry, error_run, error_exit),
 };
 
@@ -498,14 +606,11 @@ K_THREAD_DEFINE(log_thread_id, LOG_THREAD_STACK_SIZE, log_thread, NULL, NULL, NU
 K_THREAD_DEFINE(error_thread_id, ERROR_THREAD_STACK_SIZE, error_thread, NULL, NULL, NULL, ERROR_THREAD_PRIORITY, 0, 0);
 
 // Define functions
-void measure_button_callback(const struct device *dev, struct gpio_callback *cb, uint32_t pins)
-{
-    k_event_post(&button_events, GET_BTN_PRESS);
-}
 void clear_button_callback(const struct device *dev, struct gpio_callback *cb, uint32_t pins)
 {
     k_event_post(&button_events, CLEAR_BTN_PRESS);
 }
+
 void reset_button_callback(const struct device *dev, struct gpio_callback *cb, uint32_t pins)
 {
     k_event_post(&button_events, RESET_BTN_PRESS);
@@ -546,96 +651,8 @@ void battery_blink_handler(struct k_timer *timer_id) {
     LOG_DBG("Battery LED toggled to %s", battery_led_on ? "ON" : "OFF");
 }
 
-// unable to get current state
-bool is_measuring_battery = false;
-
 void battery_measure_callback(struct k_timer *timer_id) {
-    if (is_measuring_battery) {
-        LOG_DBG("Battery measurement in progress. Skipping this callback.");
-        return;
-    }
-
-    is_measuring_battery = true;
-
-    if (smf_get_current_state(SMF_CTX(&s_obj)) == &states[Idle]) {
-        int32_t voltage_mv = 0;
-
-        int ret = measure_battery_voltage(&vadc_battery, &voltage_mv);
-        if (ret == 0) {
-            LOG_INF("Battery Voltage: %d mV", voltage_mv);
-
-            // Optional: Send BLE notification with battery voltage
-            bluetooth_set_battery_level(voltage_mv);
-
-            // Adjust LED brightness based on battery voltage
-            adjust_led_brightness(&pwm_battery, voltage_mv);
-        } else {
-            LOG_ERR("Failed to measure battery voltage");
-            error_code |= ERROR_ADC_INIT;
-            smf_set_state(SMF_CTX(&s_obj), &states[Error]);
-        }
-    }
-
-    is_measuring_battery = false;
-}
-
-
-/*
-bool is_measuring_battery = false;
-
-void battery_measure_callback(struct k_timer *timer_id) {
-    if (is_measuring_battery) {
-        LOG_DBG("Battery measurement in progress. Skipping this callback.");
-        return;
-    }
-
-    is_measuring_battery = true;
-
-    if (smf_get_current_state(SMF_CTX(&s_obj)) == &states[Idle]) {
-        int32_t voltage_mv = 0;
-
-        int ret = measure_battery_voltage(&vadc_battery, &voltage_mv);
-        if (ret == 0) {
-            LOG_INF("Battery Voltage: %d mV", voltage_mv);
-
-            // Optional: Send BLE notification with battery voltage
-            bluetooth_set_battery_level(voltage_mv);
-
-            // Adjust LED brightness based on battery voltage
-            adjust_led_brightness(&pwm_battery, voltage_mv);
-        } else {
-            LOG_ERR("Failed to measure battery voltage");
-            error_code |= ERROR_ADC_INIT;
-            smf_set_state(SMF_CTX(&s_obj), &states[Error]);
-        }
-    }
-
-    is_measuring_battery = false;
-}
-*/
-
-/*
-void battery_measure_callback(struct k_timer *timer_id) {
-    if (smf_get_current_state(SMF_CTX(&s_obj)) == &states[Idle]) { 
-        int32_t battery_voltage = 0;
-
-        if (measure_battery_voltage(&vadc_battery, &battery_voltage) != 0) {
-            LOG_ERR("Failed to measure battery voltage");
-            error_code |= ERROR_ADC_INIT;
-            smf_set_state(SMF_CTX(&s_obj), &states[Error]);
-        } else {
-            LOG_INF("Battery Voltage (mV): %d", battery_voltage);
-            // Optionally, send the battery voltage over BLE
-
-            // Update the BLE Battery Service with the measured value
-            bluetooth_set_battery_level(battery_voltage);
-        }
-    }
-} */
-
-/*
-void battery_measure_callback(struct k_timer *timer_id) {
-    if (smf_get_current_state(SMF_CTX(&s_obj)) == &states[Idle]) {
+    if (SMF_CTX(&s_obj)->current == &states[Idle]) {
         int32_t battery_voltage = 0;
 
         if (measure_battery_voltage(&vadc_battery, &battery_voltage) == 0) {
@@ -651,10 +668,14 @@ void battery_measure_callback(struct k_timer *timer_id) {
         }
     }
 }
-*/
-
 
 int measure_battery_voltage(const struct adc_dt_spec *adc, int32_t *voltage_mv) {
+    
+    if (!device_is_ready(adc->dev)) {
+        LOG_ERR("ADC device not ready");
+        return -ENODEV; // Device not ready error
+    }
+
     struct adc_sequence sequence = {
         .channels    = BIT(adc->channel_id),
         .buffer      = voltage_mv, // Store result directly in voltage_mv
@@ -662,15 +683,10 @@ int measure_battery_voltage(const struct adc_dt_spec *adc, int32_t *voltage_mv) 
         .resolution  = adc->resolution,
     };
 
-    if (!device_is_ready(adc->dev)) {
-        LOG_ERR("ADC device not ready");
-        return -ENODEV;
-    }
-
     int ret = adc_read(adc->dev, &sequence);
     if (ret != 0) {
         LOG_ERR("ADC read failed: %d", ret);
-        return ret;
+        return ret; // Return the error code from ADC read
     }
 
     // Convert raw ADC value to millivolts
@@ -680,69 +696,114 @@ int measure_battery_voltage(const struct adc_dt_spec *adc, int32_t *voltage_mv) 
     return 0;
 }
 
-/*
-void battery_measure_callback(struct k_timer *timer_id) {
-    if (smf_get_current_state(SMF_CTX(&s_obj)) == &states[Idle]) {
-        int32_t voltage_mv = 0;
-
-        int ret = measure_battery_voltage(&vadc_battery, &voltage_mv);
-        if (ret == 0) {
-            LOG_INF("Battery Voltage: %d mV", voltage_mv);
-
-            // Optional: Send BLE notification with battery voltage
-            bluetooth_set_battery_level(voltage_mv); 
-
-            // Adjust LED brightness based on battery voltage
-            adjust_led_brightness(&pwm_battery, voltage_mv);
-        } else {
-            LOG_ERR("Failed to measure battery voltage");
-            error_code |= ERROR_ADC_INIT;
-            smf_set_state(SMF_CTX(&s_obj), &states[Error]);
-        }
-    }
-}
-*/
-
 void adjust_led_brightness(const struct pwm_dt_spec *pwm_led, int32_t voltage_mv) {
-    uint32_t duty_cycle = (voltage_mv * 100) / MAX_BATTERY_VOLTAGE_MV; // Scale 0–100%
-    duty_cycle = (duty_cycle * PWM_PERIOD_USEC) / 100; // Convert to PWM period
+    
+    // Calculate the duty cycle as a percentage of the maximum battery voltage
+    uint32_t duty_cycle_percentage = (voltage_mv * 100) / MAX_BATTERY_VOLTAGE_MV; // Scale 0–100%
 
+    // Ensure the duty cycle percentage is within bounds
+    if (duty_cycle_percentage > 100) {
+        duty_cycle_percentage = 100; // Cap at 100%
+    } else if (duty_cycle_percentage < 0) {
+        duty_cycle_percentage = 0; // Ensure it doesn't go below 0%
+    }
+
+    // Convert to PWM period
+    uint32_t duty_cycle = (duty_cycle_percentage * PWM_PERIOD_USEC) / 100; // Convert to PWM period
+
+    // Set the PWM with the calculated duty cycle
     if (pwm_set_dt(pwm_led, PWM_PERIOD_USEC, duty_cycle) != 0) {
         LOG_ERR("Failed to set PWM for battery LED");
     } else {
-        LOG_DBG("Battery LED brightness set to %d%%", (voltage_mv * 100) / MAX_BATTERY_VOLTAGE_MV);
+        LOG_DBG("Battery LED brightness set to %d%%", duty_cycle_percentage);
     }
 }
 
+void ecg_sampling_callback(struct k_timer *timer_id) {
+    int16_t ecg_sample = 0;
 
+    if (ecg_index >= ECG_BUFFER_SIZE) {
+        k_timer_stop(&ecg_sampling_timer);
+        LOG_INF("Finished ECG sampling");
+        return;
+    }
 
-/*
-int measure_battery_voltage(const struct adc_dt_spec *adc, int32_t *voltage_mv) {
+    // Read ECG signal using ADC
     struct adc_sequence sequence = {
-        .channels    = BIT(adc->channel_id),
-        .buffer      = voltage_mv, // Store result directly in voltage_mv
-        .buffer_size = sizeof(*voltage_mv),
-        .resolution  = adc->resolution,
+        .channels = BIT(vadc_hrate.channel_id),
+        .buffer = &ecg_sample,
+        .buffer_size = sizeof(ecg_sample),
+        .resolution = vadc_hrate.resolution,
     };
 
-    if (!device_is_ready(adc->dev)) {
-        LOG_ERR("ADC device not ready");
-        return -ENODEV;
+    if (adc_read(vadc_hrate.dev, &sequence) == 0) {
+        ecg_buffer[ecg_index++] = ecg_sample;
+    } else {
+        LOG_ERR("Failed to sample ECG");
+        k_timer_stop(&ecg_sampling_timer);
+    }
+}
+
+int calculate_average_heart_rate(const struct adc_dt_spec *adc) {
+    // Ensure ECG sampling is complete
+    if (ecg_index < ECG_BUFFER_SIZE) {
+        LOG_ERR("ECG sampling incomplete");
+        return -1;
     }
 
-    int ret = adc_read(adc->dev, &sequence);
-    if (ret != 0) {
-        LOG_ERR("ADC read failed: %d", ret);
-        return ret;
+    size_t r_peak_count = 0;
+    //int16_t threshold = 200; // Example threshold for R-peak detection
+
+    //  R-peak detection
+    for (size_t i = 1; i < ecg_index - 1; i++) {
+    if (ecg_buffer[i] > hr_config.r_peak_threshold &&
+        ecg_buffer[i] > ecg_buffer[i - 1] &&
+        ecg_buffer[i] > ecg_buffer[i + 1]) {
+        r_peak_count++;
+        }
     }
 
-    // Convert raw ADC value to millivolts
-    *voltage_mv = (*voltage_mv * adc->channel_cfg.reference) / (1 << adc->resolution);
+    // Calculate average BPM
+    int bpm = (r_peak_count * 60) / 30; // BPM = Peaks per minute
+    LOG_INF("Calculated BPM: %d", bpm);
 
-    LOG_INF("Measured Battery Voltage: %d mV", *voltage_mv);
     return 0;
 }
-*/
+
+void measure_button_callback(const struct device *dev, struct gpio_callback *cb, uint32_t pins) {
+    uint32_t current_time = k_uptime_get_32(); // Get current time in milliseconds
+
+    // Check if enough time has passed since the last valid press
+    if ((current_time - last_press_time) < DEBOUNCE_DELAY_MS) {
+        LOG_DBG("Button press ignored due to debounce.");
+        return; // Ignore the button press
+    }
+
+    // Process the button press
+    if (SMF_CTX(&s_obj)->current == &states[Measure]) {
+        LOG_ERR("BUTTON1 pressed during measurements. Posting error event.");
+        k_event_post(&error_event, ERROR_EVENT);  // Trigger error event
+    } else {
+        LOG_INF("BUTTON1 pressed. Triggering measurement.");
+        k_event_post(&button_events, GET_BTN_PRESS);  // Trigger measurement event
+    }
+
+    // Update the last press time
+    last_press_time = current_time;
+}
+
+void hrate_blink_handler(struct k_timer *timer_id) {
+    static bool led_on = false;
+    const struct gpio_dt_spec *led = &hrate_led;
+
+    // Toggle LED state
+    gpio_pin_set_dt(led, led_on);
+    led_on = !led_on;  // Toggle state
+
+    // Log the toggle state with heart rate info
+    LOG_DBG("Heart Rate LED toggled to %s at %d BPM", led_on ? "ON" : "OFF", average_hr);
+}
+
 
 
 

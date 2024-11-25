@@ -33,7 +33,7 @@ int read_temperature_sensor(const struct device *temp_sensor, int32_t *temperatu
         // data returned in kPa
         *temperature_degC = sensor_value_to_float(&sensor_vals);
 
-        LOG_INF("Temperature (deg C): %d", *temperature_degC);
+        LOG_INF("Temperature (deg C): %.2f", sensor_value_to_float(&sensor_vals));
 
         return 0;
 }          
