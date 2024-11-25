@@ -292,7 +292,7 @@ static void init_entry(void *o)
         // return -1;
     }
 
-    // check that the temperature sensor is ready
+    // check that the temp sensor is ready
     if (!device_is_ready(temp_sensor)) {
             LOG_ERR("Temperature sensor %s is not ready", temp_sensor->name);
             //return -1;
@@ -347,7 +347,6 @@ static void idle_entry(void *o)
 
 }
 
-
 static void idle_run(void *o)
 {   
     LOG_INF("Idle Run State");
@@ -373,8 +372,7 @@ static void idle_run(void *o)
             // Log a warning if LED2 is not blinking
             LOG_WRN("Cannot clear LED2: No measurement has been taken.");
         }
-    }
-    
+    }  
 }
 
 static void idle_exit(void *o) {
@@ -461,7 +459,6 @@ static void measure_exit(void *o) {
     k_timer_stop(&hrate_blink_timer);  // Stop the Heart Rate LED Blink Timer
 }
 
-
 static void error_entry(void *o) {
     LOG_INF("Error Entry State");
 
@@ -513,8 +510,7 @@ int main(void) {
     int ret;
  
     ret = bluetooth_init(&bluetooth_callbacks, &remote_service_callbacks);
-
-   
+  
     }*/
 
     // Initialize state machine context
@@ -532,7 +528,6 @@ int main(void) {
         k_msleep(1);  // sleep for 1 ms for logging purposes
         
         // read the temperature every MEASUREMENT_DELAY_MS
-
         ret = read_temperature_sensor(temp_sensor, &temperature_degC);
         if (ret != 0) {
             LOG_ERR("Problem reading the temperature sensor (%d)", ret);
@@ -636,7 +631,6 @@ void heartbeat_blink_handler(struct k_timer *heartbeat_timer) {
     LOG_DBG("Heartbeat LED toggled to %s", led_on ? "ON" : "OFF");
 }
 
-
 void battery_blink_handler(struct k_timer *timer_id) {
     static bool battery_led_on = false;
     const struct gpio_dt_spec battery_led = GPIO_DT_SPEC_GET(DT_ALIAS(battery), gpios);
@@ -657,7 +651,7 @@ void battery_measure_callback(struct k_timer *timer_id) {
 
         if (measure_battery_voltage(&vadc_battery, &battery_voltage) == 0) {
             LOG_INF("Battery Voltage: %d mV", battery_voltage);
-            bluetooth_set_battery_level(battery_voltage); // Optional BLE notification
+            bluetooth_set_battery_level(battery_voltage); // BLE notification
 
             // Adjust LED brightness based on battery level
             adjust_led_brightness(&pwm_battery, battery_voltage);
@@ -752,7 +746,7 @@ int calculate_average_heart_rate(const struct adc_dt_spec *adc) {
     }
 
     size_t r_peak_count = 0;
-    //int16_t threshold = 200; // Example threshold for R-peak detection
+    //int16_t threshold = 200; // threshold for R-peak detection
 
     //  R-peak detection
     for (size_t i = 1; i < ecg_index - 1; i++) {
