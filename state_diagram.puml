@@ -1,44 +1,50 @@
 @startuml
 
-[*] -> INIT
+[*] --> INIT
 
 state INIT {
     init_entry: Perform initialization
-    init_entry -> init_run
+    init_entry --> init_run
     init_run: Initialize peripherals (GPIO, ADC, I2C, BLE, PWM)
-    init_run -> init_exit
+    init_run --> init_exit
     init_exit: Start heartbeat timer and transition to IDLE
 }
 
-INIT -> IDLE : Successful initialization
-INIT -> ERROR : Initialization Failure
+INIT --> IDLE : Successful initialization
+INIT --> ERROR : Initialization Failure
 
 state IDLE {
     idle_entry: Start battery monitoring timer (1 min)
-    idle_entry -> idle_run
+    idle_entry --> idle_run
     idle_run: Wait for button events
-    idle_run -> measure_entry : BUTTON1 pressed (start measurement)
-    idle_run -> error_entry : Error event
-    idle_run -> idle_exit : BUTTON3 pressed (reset from ERROR)
+    idle_run --> MEASURING : BUTTON1 pressed (start measurement)
+    idle_run --> ERROR : Error event
+    idle_run --> IDLE : BUTTON3 pressed (reset from ERROR)
     idle_exit: Stop periodic timers
 }
 
-state MEASURE {
+state MEASURING {
     measure_entry: Start measurements
-    measure_entry -> measure_run
+    measure_entry --> measure_run
     measure_run: Perform temperature and ECG measurements\nCalculate average heart rate\nNotify BLE (temperature, heart rate)
-    measure_run -> idle_entry : Measurement complete
-    measure_run -> error_entry : Error detected
+    measure_run --> IDLE : Measurement complete
+    measure_run --> ERROR : Error detected
     measure_exit: Stop measurement-specific timers
 }
 
-
 state ERROR {
     error_entry: Blink all LEDs (50% duty cycle) and send BLE notification
-    error_entry -> error_run
+    error_entry --> error_run
     error_run: Wait for BUTTON3 to reset
-    error_run -> idle_entry : BUTTON3 pressed (reset)
+    error_run --> IDLE : BUTTON3 pressed (reset)
     error_exit: Stop error-related timers and clear error events
+}
+
+state NOTIFICATIONS {
+    notify_entry: Send BLE notifications
+    notify_entry --> notify_run
+    notify_run: Notify temperature, heart rate, error code
+    notify_run --> IDLE : Notifications sent
 }
 
 @enduml
