@@ -17,13 +17,21 @@
 
 LOG_MODULE_REGISTER(main, LOG_LEVEL_DBG);
 
+// Constants
 #define MEASUREMENT_DELAY_MS 1000
+#define DEBOUNCE_DELAY_MS 50 // Debounce delay in milliseconds
+
+// Thread stack sizes and priorities
 #define LOG_THREAD_STACK_SIZE 1024     // Define the size of the thread stack
 #define LOG_THREAD_PRIORITY 5          // Define the thread priority
 #define ERROR_THREAD_STACK_SIZE 1024     // Define the size of the thread stack
 #define ERROR_THREAD_PRIORITY 5          // Define the thread priority
+
+// Battery and PWM configurations
 #define MAX_BATTERY_VOLTAGE_MV 3700   // Maximum battery voltage in millivolts
 #define PWM_PERIOD_USEC 1000         // PWM period in microseconds (1 kHz frequency)
+
+// ECG configurations
 #define ECG_SAMPLE_RATE 100 // Sampling rate in Hz
 #define ECG_BUFFER_SIZE (ECG_SAMPLE_RATE * 30) // 30 seconds of data
 #define R_PEAK_THRESHOLD 2000 // Threshold for R peak detection
@@ -36,23 +44,18 @@ LOG_MODULE_REGISTER(main, LOG_LEVEL_DBG);
     ADC_CHANNEL_CFG_FROM_DT_NODE(DT_ALIAS(adc_alias))          \
 }
 
-// Declare the thread stack
-K_THREAD_STACK_DEFINE(log_thread_stack, LOG_THREAD_STACK_SIZE);
-K_THREAD_STACK_DEFINE(error_thread_stack, ERROR_THREAD_STACK_SIZE);
-
-// list of events that can be triggered by the buttons
+// Event definitions
 K_EVENT_DEFINE(button_events);
 #define GET_BTN_PRESS BIT(0)
 #define CLEAR_BTN_PRESS BIT(1)
 #define RESET_BTN_PRESS BIT(2)
 #define ANY_BTN_PRESS (GET_BTN_PRESS | CLEAR_BTN_PRESS | RESET_BTN_PRESS)
-#define DEBOUNCE_DELAY_MS 50 // Define debounce delay in milliseconds
 
 // error event
 K_EVENT_DEFINE(error_event);
 #define ERROR_EVENT BIT(0)
 
-// define the error event
+// Error codes
 K_EVENT_DEFINE(errors);
 #define ERROR_ADC_INIT      BIT(0)
 #define ERROR_PWM_INIT      BIT(1)
@@ -60,24 +63,13 @@ K_EVENT_DEFINE(errors);
 #define ERROR_GPIO_INIT     BIT(3)
 #define ERROR_SENSOR_READ   BIT(4)
 
-// function declarations
+// Declare the thread stack
+K_THREAD_STACK_DEFINE(log_thread_stack, LOG_THREAD_STACK_SIZE);
+K_THREAD_STACK_DEFINE(error_thread_stack, ERROR_THREAD_STACK_SIZE);
 
+// function declarations
 const struct device *const temp_sensor = DEVICE_DT_GET_ONE(microchip_mcp9808);
 void adjust_led_brightness(const struct pwm_dt_spec *pwm_led, int32_t battery_voltage_mv);
-
-
-// global variables
-int32_t temperature_degC;
-int32_t error_code = 0;  // Global variable to store error codes
-// Global variable to store the battery voltage
-int32_t battery_voltage = 0;
-static int16_t ecg_buffer[ECG_BUFFER_SIZE];
-static size_t ecg_index = 0;
-int32_t average_hr = 0; // Global variable to store the average heart rate
-static uint32_t last_press_time = 0; // Variable to store the last press time
-
-int measure_battery_voltage(const struct adc_dt_spec *adc, int32_t *voltage_mv);
-int calculate_average_heart_rate(const struct adc_dt_spec *adc);
 
 // button gpio structs
 const struct gpio_dt_spec measure_button = GPIO_DT_SPEC_GET(DT_ALIAS(measurebutton), gpios);
@@ -100,13 +92,29 @@ static const struct pwm_dt_spec pwm_battery = PWM_DT_SPEC_GET(DT_ALIAS(pwmled1))
 static const struct pwm_dt_spec pwm_hrate = PWM_DT_SPEC_GET(DT_ALIAS(pwmled2));
 static const struct pwm_dt_spec pwm_err = PWM_DT_SPEC_GET(DT_ALIAS(pwmled3));
 
+// global variables
+int32_t temperature_degC;
+int32_t error_code = 0;  // Global variable to store error codes
+int32_t battery_voltage = 0; // Global variable to store the battery voltage
+static int16_t ecg_buffer[ECG_BUFFER_SIZE];
+static size_t ecg_index = 0;
+int32_t average_hr = 0; // Global variable to store the average heart rate
+static uint32_t last_press_time = 0; // Variable to store the last press time
+
 // function declarations
-// define callback functions
+int measure_battery_voltage(const struct adc_dt_spec *adc, int32_t *voltage_mv);
+int calculate_average_heart_rate(const struct adc_dt_spec *adc);
+
+static const struct smf_state states[];
+const struct smf_state *smf_get_current_state(const struct smf_ctx *ctx);
+void smf_set_state(struct smf_ctx *ctx, const struct smf_state *state);
+
+// Callback Function Declarations
 void measure_button_callback(const struct device *dev, struct gpio_callback *cb, uint32_t pins);
 void clear_button_callback(const struct device *dev, struct gpio_callback *cb, uint32_t pins);
 void reset_button_callback(const struct device *dev, struct gpio_callback *cb, uint32_t pins);
 
-// define handler functions for blinking LEDs
+// Handler function declarations
 void heartbeat_blink_handler(struct k_timer *heartbeat_timer);
 void battery_blink_handler(struct k_timer *battery_blink_timer);
 void out_duration_handler(struct k_timer *out_duration_timer);
@@ -116,23 +124,10 @@ void battery_measure_callback(struct k_timer *battery_measure_timer);
 void ecg_sampling_callback(struct k_timer *ecg_sampling_timer);
 void hrate_blink_handler(struct k_timer *hrate_blink_timer);
 
-// define timers
-K_TIMER_DEFINE(heartbeat_timer, heartbeat_blink_handler, NULL);
-K_TIMER_DEFINE(temp_read_timer, temp_read_callback, NULL);
-K_TIMER_DEFINE(battery_blink_timer, battery_blink_handler, NULL);
-K_TIMER_DEFINE(battery_measure_timer, battery_measure_callback, NULL);
-K_TIMER_DEFINE(ecg_sampling_timer, ecg_sampling_callback, NULL); // Timer for ECG sampling
-K_TIMER_DEFINE(hrate_blink_timer, hrate_blink_handler, NULL);
-
 // initialize GPIO Callback Structs
 static struct gpio_callback measure_button_cb; // need one per CB
 static struct gpio_callback clear_button_cb;
 static struct gpio_callback reset_button_cb;
-
-//Forward declaration of state table
-static const struct smf_state states[];
-const struct smf_state *smf_get_current_state(const struct smf_ctx *ctx);
-void smf_set_state(struct smf_ctx *ctx, const struct smf_state *state);
 
 struct heart_rate_config {
     int r_peak_threshold; // Threshold for R-peak detection
@@ -146,6 +141,14 @@ struct heart_rate_config hr_config = {
     .min_bpm = 40,
     .max_bpm = 200,
 };
+
+// Timer declarations
+K_TIMER_DEFINE(heartbeat_timer, heartbeat_blink_handler, NULL);
+K_TIMER_DEFINE(temp_read_timer, temp_read_callback, NULL);
+K_TIMER_DEFINE(battery_blink_timer, battery_blink_handler, NULL);
+K_TIMER_DEFINE(battery_measure_timer, battery_measure_callback, NULL);
+K_TIMER_DEFINE(ecg_sampling_timer, ecg_sampling_callback, NULL); 
+K_TIMER_DEFINE(hrate_blink_timer, hrate_blink_handler, NULL);
 
 // define states for state machine (THESE ARE ONLY PLACEHOLDERS)
 enum smf_states{ Init, Idle, Measure, Error };
