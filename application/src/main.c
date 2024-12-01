@@ -19,7 +19,7 @@ LOG_MODULE_REGISTER(main, LOG_LEVEL_DBG);
 
 // Constants
 #define MEASUREMENT_DELAY_MS 1000
-#define DEBOUNCE_DELAY_MS 50 // Debounce delay in milliseconds
+#define DEBOUNCE_DELAY_MS 20 // Debounce delay in milliseconds
 
 // Thread stack sizes and priorities
 #define LOG_THREAD_STACK_SIZE 1024     // Define the size of the thread stack
@@ -33,7 +33,7 @@ LOG_MODULE_REGISTER(main, LOG_LEVEL_DBG);
 
 // ECG configurations
 #define ECG_SAMPLE_RATE 100 // Sampling rate in Hz
-#define ECG_BUFFER_SIZE (ECG_SAMPLE_RATE * 30) // 30 seconds of data
+#define ECG_BUFFER_SIZE (ECG_SAMPLE_RATE * 30) // 30 seconds of data (need to change)
 #define R_PEAK_THRESHOLD 2000 // Threshold for R peak detection
 
 // ADC Struct Macro
@@ -347,6 +347,7 @@ static void idle_entry(void *o)
 
     // Start the battery timer for 1-minute periodic measurements
     k_timer_start(&battery_measure_timer, K_NO_WAIT, K_MINUTES(1));
+    LOG_DBG("Battery measurement timer started.");
 
 }
 
@@ -357,11 +358,13 @@ static void idle_run(void *o)
     if (s_obj.events & RESET_BTN_PRESS) {
         LOG_INF("Reset button pressed, returning to initial state.");
         smf_set_state(SMF_CTX(&s_obj), &states[Init]);
+        s_obj.events &= ~RESET_BTN_PRESS; // Clear the event flag
     }  
 
     if (s_obj.events & GET_BTN_PRESS) {
         LOG_INF("Measure button pressed, transitioning to MEASURE state.");
         smf_set_state(SMF_CTX(&s_obj), &states[Measure]);
+        s_obj.events &= ~GET_BTN_PRESS; // Clear the event flag
     }
 
     if (s_obj.events & CLEAR_BTN_PRESS) {
@@ -375,6 +378,7 @@ static void idle_run(void *o)
             // Log a warning if LED2 is not blinking
             LOG_WRN("Cannot clear LED2: No measurement has been taken.");
         }
+        s_obj.events &= ~CLEAR_BTN_PRESS; // Clear the event flag
     }  
 }
 
@@ -757,6 +761,7 @@ int calculate_average_heart_rate(const struct adc_dt_spec *adc) {
         ecg_buffer[i] > ecg_buffer[i - 1] &&
         ecg_buffer[i] > ecg_buffer[i + 1]) {
         r_peak_count++;
+        LOG_DBG("R-peak detected at index %d: %d", i, ecg_buffer[i]);
         }
     }
 

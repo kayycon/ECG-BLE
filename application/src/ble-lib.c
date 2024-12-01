@@ -197,8 +197,6 @@ void bluetooth_set_battery_level(int32_t raw_mV) {
     }
 }
 
-
-
 int send_BT_notification(struct bt_conn *conn, uint8_t *value, uint16_t length) {
     if (!conn) {
         LOG_ERR("Invalid connection");
