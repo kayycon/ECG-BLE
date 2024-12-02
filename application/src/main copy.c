@@ -123,7 +123,6 @@ void temp_read_callback(struct k_timer *temp_read_timer);
 void battery_measure_callback(struct k_timer *battery_measure_timer); 
 void ecg_sampling_callback(struct k_timer *ecg_sampling_timer);
 void hrate_blink_handler(struct k_timer *hrate_blink_timer);
-void error_blink_handler(struct k_timer *error_blink_timer);
 
 // initialize GPIO Callback Structs
 static struct gpio_callback measure_button_cb; // need one per CB
@@ -150,9 +149,6 @@ K_TIMER_DEFINE(battery_blink_timer, battery_blink_handler, NULL);
 K_TIMER_DEFINE(battery_measure_timer, battery_measure_callback, NULL);
 K_TIMER_DEFINE(ecg_sampling_timer, ecg_sampling_callback, NULL); 
 K_TIMER_DEFINE(hrate_blink_timer, hrate_blink_handler, NULL);
-K_TIMER_DEFINE(error_blink_timer, error_blink_handler, NULL);
-K_TIMER_DEFINE(ecg_sampling_stop_timer, NULL, NULL);
-
 
 // define states for state machine (THESE ARE ONLY PLACEHOLDERS)
 enum smf_states{ Init, Idle, Measure, Error };
@@ -397,25 +393,13 @@ static void idle_exit(void *o) {
 
     // Stop the battery measurement timer
     k_timer_stop(&battery_measure_timer);
-    LOG_DBG("Battery measurement timer stopped.");
 }
 
 static void measure_entry(void *o) {
     LOG_INF("Measure Entry State");
 
-    // Reset ECG buffer index
-    ecg_index = 0;
-
-    // Start ECG sampling timer (sampling every 10 ms for 30 seconds)
-    k_timer_start(&ecg_sampling_timer, K_NO_WAIT, K_MSEC(10)); // 100 Hz sampling rate
-
-    // Optionally, set a timer to stop sampling after 30 seconds
-    k_timer_start(&ecg_sampling_stop_timer, K_SECONDS(30), K_NO_WAIT);
-
-    LOG_INF("Measurement process started.");
-
     // Start ECG sampling timer (30 seconds)
-    //k_timer_start(&ecg_sampling_timer, K_NO_WAIT, K_SECONDS(30));
+    k_timer_start(&ecg_sampling_timer, K_NO_WAIT, K_SECONDS(30));
 }
 
 static void measure_run(void *o) {
@@ -436,18 +420,18 @@ static void measure_run(void *o) {
         smf_set_state(SMF_CTX(&s_obj), &states[Error]);
         return;
     }
+
     LOG_INF("Temperature: %d °C", temperature_degC);
 
-    // Step 2: Ensure ECG Sampling is Complete
-    if (ecg_index < ECG_BUFFER_SIZE) {
-        LOG_INF("ECG sampling not yet complete. Waiting...");
-        return;  // Wait for ECG sampling to complete
+    // Send Temperature Notification
+    ret = send_BT_notification(current_conn, (uint8_t *)&temperature_degC, sizeof(temperature_degC));
+    if (ret) {
+        LOG_ERR("Failed to send temperature notification");
     }
 
-    // Step 3: Calculate Average Heart Rate
-    ret = calculate_average_heart_rate(&vadc_hrate);
-    if (ret == 0) {
-        LOG_INF("Average Heart Rate calculated successfully: %d BPM", average_hr);
+    // Step 2: Calculate Average Heart Rate
+    if (calculate_average_heart_rate(&vadc_hrate) == 0) {
+        LOG_INF("Average Heart Rate calculated successfully.");
     } else {
         LOG_ERR("Failed to calculate heart rate");
         error_code |= ERROR_ADC_INIT;
@@ -455,7 +439,7 @@ static void measure_run(void *o) {
         return;
     }
 
-    // Step 4: Set Timer for Heart Rate LED Blink
+    // Step 3: Set Timer for Heart Rate LED Blink
     if (average_hr > 0) {
         uint32_t period_ms = 60000 / average_hr;      // Timer period in milliseconds
         uint32_t on_time_ms = period_ms / 4;         // 25% duty cycle
@@ -464,13 +448,7 @@ static void measure_run(void *o) {
         LOG_INF("Heart Rate LED blink started with %d ms ON time and %d ms period", on_time_ms, period_ms);
     }
 
-    // Step 5: Send BLE Notifications
-    // Send Temperature Notification
-    ret = send_BT_notification(current_conn, (uint8_t *)&temperature_degC, sizeof(temperature_degC));
-    if (ret) {
-        LOG_ERR("Failed to send temperature notification");
-    }
-
+    // Notify Heart Rate via BLE
     if (current_conn) {
     int ret = send_BT_notification(current_conn, (uint8_t *)&average_hr, sizeof(average_hr));
     if (ret) {
@@ -489,8 +467,6 @@ static void measure_run(void *o) {
 static void measure_exit(void *o) {
     LOG_INF("Exiting Measure State");
     k_timer_stop(&hrate_blink_timer);  // Stop the Heart Rate LED Blink Timer
-
-    k_timer_stop(&hrate_blink_timer);  // Stop blinking LED2
 }
 
 static void error_entry(void *o) {
@@ -499,10 +475,9 @@ static void error_entry(void *o) {
     // Blink all LEDs at 50% duty cycle
     k_timer_start(&heartbeat_timer, K_NO_WAIT, K_MSEC(500));
     k_timer_start(&battery_blink_timer, K_NO_WAIT, K_MSEC(500));
-    k_timer_start(&hrate_blink_timer, K_NO_WAIT, K_MSEC(500));
-    k_timer_start(&error_blink_timer, K_NO_WAIT, K_MSEC(500));
+    k_timer_start(&temp_read_timer, K_NO_WAIT, K_MSEC(500));
 
-    LOG_INF("Started all LED timers in Error State.");
+    LOG_INF("Started heartbeat_timer, battery_blink_timer, and temp_read_timer in Error State");
 
     // Notify Error Code via BLE
     int ret = send_BT_notification(current_conn, (uint8_t *)&error_code, sizeof(error_code));
@@ -706,15 +681,6 @@ void battery_blink_handler(struct k_timer *timer_id) {
     LOG_DBG("Battery LED toggled to %s", battery_led_on ? "ON" : "OFF");
 }
 
-void error_blink_handler(struct k_timer *timer_id) {
-    static bool led_on = false;
-
-    gpio_pin_set_dt(&error_led, led_on);
-    led_on = !led_on;  // Toggle state
-    LOG_DBG("Error LED toggled to %s", led_on ? "ON" : "OFF");
-}
-
-
 void battery_measure_callback(struct k_timer *timer_id) {
     if (SMF_CTX(&s_obj)->current == &states[Idle]) {
         int32_t battery_voltage = 0;
@@ -832,10 +798,7 @@ int calculate_average_heart_rate(const struct adc_dt_spec *adc) {
     int bpm = (r_peak_count * 60) / 30; // BPM = Peaks per minute
     LOG_INF("Calculated BPM: %d", bpm);
 
-    // Assign to global variable
-    average_hr = bpm;
-
-    return 0; // Success
+    return 0;
 }
 
 void measure_button_callback(const struct device *dev, struct gpio_callback *cb, uint32_t pins) {
@@ -852,8 +815,8 @@ void measure_button_callback(const struct device *dev, struct gpio_callback *cb,
         LOG_ERR("BUTTON1 pressed during measurements. Posting error event.");
         k_event_post(&error_event, ERROR_EVENT);  // Trigger error event
     } else {
-        LOG_INF("BUTTON1 pressed. Starting measurement.");
-        k_event_post(&button_events, GET_BTN_PRESS);  // start/Trigger measurement event
+        LOG_INF("BUTTON1 pressed. Triggering measurement.");
+        k_event_post(&button_events, GET_BTN_PRESS);  // Trigger measurement event
     }
 
     // Update the last press time

@@ -4,3 +4,4 @@ build*/
 .ipynb_checkpoints/
 
 src/extra.c/
+src/main copy.c/
