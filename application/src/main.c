@@ -493,7 +493,7 @@ static void error_run(void *o)
         error_code = 0;
 
         // Transition back to the Init state to reinitialize
-        smf_set_state(SMF_CTX(&s_obj), &states[Idle]);
+        smf_set_state(SMF_CTX(&s_obj), &states[Error]);
     }
 }
 
