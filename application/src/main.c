@@ -33,6 +33,7 @@ LOG_MODULE_REGISTER(main, LOG_LEVEL_DBG);
 #define PWM_PERIOD_USEC 1000         // PWM period in microseconds (1 kHz frequency)
 
 // ECG configurations
+#define BLINK_TIMER_INTERVAL_MS 500
 #define ECG_SAMPLE_RATE 100 // Sampling rate in Hz
 #define ECG_BUFFER_SIZE (ECG_SAMPLE_RATE * 30) // 30 seconds of data (need to change)
 #define R_PEAK_THRESHOLD 2000 // Threshold for R peak detection
@@ -235,9 +236,9 @@ static void init_entry(void *o)
     LOG_INF("Bluetooth initialized");
 */
     // Start the heartbeat timer (1-second period, 50% duty cycle)
-    k_timer_start(&heartbeat_timer, K_NO_WAIT, K_SECONDS(1));
 
-    k_timer_start(&heartbeat_timer, K_NO_WAIT, K_SECONDS(1));
+    //k_timer_start(&heartbeat_timer, K_NO_WAIT, K_SECONDS(1));
+    k_timer_start(&heartbeat_timer, K_MSEC(BLINK_TIMER_INTERVAL_MS), K_MSEC(BLINK_TIMER_INTERVAL_MS));
     LOG_INF("Heartbeat timer started.");
     
 
@@ -468,11 +469,11 @@ static void measure_entry(void *o) {
     );
 
     // Start ECG sampling timer (sampling every 10 ms for 30 seconds)
-    //k_timer_start(&ecg_sampling_timer, K_NO_WAIT, K_MSEC(10)); // 100 Hz sampling rate
+    k_timer_start(&ecg_sampling_timer, K_NO_WAIT, K_MSEC(10)); // 100 Hz sampling rate
 
 
     // Optionally, set a timer to stop sampling after 30 seconds
-    //k_timer_start(&ecg_sampling_stop_timer, K_SECONDS(30), K_NO_WAIT);
+    k_timer_start(&ecg_sampling_stop_timer, K_SECONDS(30), K_NO_WAIT);
     LOG_INF("Measurement process started.");
 
     // Start ECG sampling timer (30 seconds)
@@ -960,7 +961,8 @@ void ecg_sampling_work_handler(struct k_work *work) {
 
     int ret = adc_read(vadc_hrate.dev, &sequence);
     if (ret == 0) {
-    ecg_buffer[ecg_index++] = ecg_sample;
+    ecg_index++;
+    ecg_buffer[ecg_index] = ecg_sample;
     LOG_DBG("ADC read success, ecg_sample=%d, ecg_index=%d", ecg_sample, ecg_index);
     } else {
     LOG_ERR("Failed to sample ECG, adc_read returned: %d", ret);

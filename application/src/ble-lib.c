@@ -196,6 +196,13 @@ void bluetooth_set_battery_level(int32_t raw_mV) {
         LOG_ERR("BAS set error (err = %d)", err);
     }
 }
+void notify_heart_rate(uint8_t heart_rate) {
+    if (bt_hrs_notify(heart_rate) == 0) {
+        LOG_INF("Heart rate notified: %d BPM", heart_rate);
+    } else {
+        LOG_ERR("Failed to notify heart rate.");
+    }
+}
 
 int send_BT_notification(struct bt_conn *conn, uint8_t *value, uint16_t length) {
     if (!conn) {
