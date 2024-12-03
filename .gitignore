@@ -3,5 +3,5 @@ build*/
 .vscode/
 .ipynb_checkpoints/
 
-src/extra.c/
-src/main copy.c/
+.src/extra.c/
+.src/main copy.c/

@@ -34,7 +34,7 @@ LOG_MODULE_REGISTER(main, LOG_LEVEL_DBG);
 
 // ECG configurations
 #define BLINK_TIMER_INTERVAL_MS 500
-#define ECG_SAMPLE_RATE 100 // Sampling rate in Hz
+#define ECG_SAMPLE_RATE 10 // Sampling rate in Hz
 #define ECG_BUFFER_SIZE (ECG_SAMPLE_RATE * 30) // 30 seconds of data (need to change)
 #define R_PEAK_THRESHOLD 2000 // Threshold for R peak detection
 #define ECG_THREAD_STACK_SIZE 2048
@@ -105,8 +105,8 @@ static const struct pwm_dt_spec pwm_err = PWM_DT_SPEC_GET(DT_ALIAS(pwmled3));
 int32_t temperature_degC;
 int32_t error_code = 0;  // Global variable to store error codes
 int32_t battery_voltage = 0; // Global variable to store the battery voltage
-static int16_t ecg_buffer[ECG_BUFFER_SIZE];
-static size_t ecg_index = 0;
+volatile uint16_t ecg_index = 0;
+int16_t ecg_buffer[ECG_BUFFER_SIZE]; // Global buffer to store ECG data
 int32_t average_hr = 0; // Global variable to store the average heart rate
 static uint32_t last_press_time = 0; // Variable to store the last press time
 struct k_thread ecg_thread_data;
@@ -141,7 +141,7 @@ void battery_measure_work_handler(struct k_work *work);
 
 // Forward declaration of the work handler function
 void ecg_sampling_work_handler(struct k_work *work);
-void ecg_sampling_thread(void *arg1, void *arg2, void *arg3);
+//void ecg_sampling_thread(void *arg1, void *arg2, void *arg3);
 
 // initialize GPIO Callback Structs
 static struct gpio_callback measure_button_cb; // need one per CB
@@ -290,6 +290,7 @@ static void init_entry(void *o)
         ECG_WORKQUEUE_PRIORITY,
         NULL
     );
+    LOG_INF("ECG workqueue started with priority %d", ECG_WORKQUEUE_PRIORITY);
 
     // Check that the ADC interface is ready
     if (!device_is_ready(vadc_hrate.dev)) {
@@ -300,17 +301,22 @@ static void init_entry(void *o)
     }
 
     // Configure the ADC channels
+    // Ensure that adc_channel_setup_dt is called for both ADC channels
     err = adc_channel_setup_dt(&vadc_battery);
     if (err < 0) {
-        LOG_ERR("Could not setup ADC channel (%d)", err);
+        LOG_ERR("Could not setup ADC channel for battery (%d)", err);
+        error_code |= ERROR_ADC_INIT;
+        smf_set_state(SMF_CTX(&s_obj), &states[Error]);
+        return;
     }
     err = adc_channel_setup_dt(&vadc_hrate);
     if (err < 0) {
-    LOG_ERR("Could not setup ADC channel (%d)", err);
-    error_code |= ERROR_ADC_INIT;
-    smf_set_state(SMF_CTX(&s_obj), &states[Error]);
-    return;
-}
+        LOG_ERR("Could not setup ADC channel for heart rate (%d)", err);
+        error_code |= ERROR_ADC_INIT;
+        smf_set_state(SMF_CTX(&s_obj), &states[Error]);
+        return;
+    }
+
 
     /*
     void test_adc_read(void) {
@@ -457,6 +463,7 @@ static void measure_entry(void *o) {
     // Reset ECG buffer index
     ecg_index = 0;
 
+    /*
     k_thread_create(
         &ecg_thread_data,
         ecg_thread_stack,
@@ -467,6 +474,7 @@ static void measure_entry(void *o) {
         0,
         K_NO_WAIT
     );
+    */
 
     // Start ECG sampling timer (sampling every 10 ms for 30 seconds)
     k_timer_start(&ecg_sampling_timer, K_NO_WAIT, K_MSEC(10)); // 100 Hz sampling rate
@@ -609,6 +617,9 @@ static const struct smf_state states[] = {
 };
 
 int main(void) {
+
+    k_thread_priority_set(k_current_get(), 2); // Set to priority 2
+
     // Initialize state machine context
     smf_set_initial(SMF_CTX(&s_obj), &states[Init]); 
 
@@ -624,7 +635,7 @@ int main(void) {
         s_obj.events |= k_event_wait(&button_events, ANY_BTN_PRESS, false, K_NO_WAIT);
 
         // Sleep briefly to allow other threads to execute
-        k_msleep(1);
+        k_msleep(10);
     }
 
     return 0;
@@ -725,6 +736,7 @@ void error_thread(void) {
     }
 }
 
+/*
 void ecg_sampling_thread(void *arg1, void *arg2, void *arg3) {
     while (1) {
         if (ecg_index >= ECG_BUFFER_SIZE) {
@@ -758,6 +770,7 @@ void ecg_sampling_thread(void *arg1, void *arg2, void *arg3) {
         k_sleep(K_MSEC(10));  // 100 Hz sampling rate
     }
 }
+*/
 
 
 // Create a thread for the log and error handlers
@@ -932,19 +945,6 @@ void adjust_led_brightness(const struct pwm_dt_spec *pwm_led, int32_t voltage_mv
     }
 }
 
-void ecg_sampling_callback(struct k_timer *timer_id) {
-    LOG_DBG("ecg_sampling_callback called, ecg_index: %d", ecg_index);
-
-    if (ecg_index >= ECG_BUFFER_SIZE) {
-        k_timer_stop(&ecg_sampling_timer);
-        LOG_INF("Finished ECG sampling");
-        return;
-    }
-
-    // Submit work to perform ADC read in thread context
-    //k_work_submit(&ecg_sampling_work);
-    k_work_submit_to_queue(&ecg_workqueue, &ecg_sampling_work);
-}
 
 void ecg_sampling_work_handler(struct k_work *work) {
     LOG_DBG("ecg_sampling_work_handler called");
@@ -961,19 +961,48 @@ void ecg_sampling_work_handler(struct k_work *work) {
 
     int ret = adc_read(vadc_hrate.dev, &sequence);
     if (ret == 0) {
-    ecg_index++;
-    ecg_buffer[ecg_index] = ecg_sample;
-    LOG_DBG("ADC read success, ecg_sample=%d, ecg_index=%d", ecg_sample, ecg_index);
+        if (ecg_index < ECG_BUFFER_SIZE) {
+            ecg_buffer[ecg_index++] = ecg_sample;
+            LOG_DBG("ADC read success, ecg_sample=%d, ecg_index=%d", ecg_sample, ecg_index);
+        }
+
+        // Check if buffer is full
+        if (ecg_index >= ECG_BUFFER_SIZE) {
+            k_timer_stop(&ecg_sampling_timer);
+            LOG_INF("Finished ECG sampling");
+        }
     } else {
-    LOG_ERR("Failed to sample ECG, adc_read returned: %d", ret);
-    k_timer_stop(&ecg_sampling_timer);
-    error_code |= ERROR_ADC_INIT;
-    atomic_set_bit(&error_events, 0);  // Post error event
-    //k_event_post(&error_event, ERROR_EVENT);
+        LOG_ERR("Failed to sample ECG, adc_read returned: %d", ret);
+        k_timer_stop(&ecg_sampling_timer);
+        error_code |= ERROR_ADC_INIT;
+        atomic_set_bit(&error_events, 0);
+    }
 }
 
+void ecg_sampling_callback(struct k_timer *timer_id) {
+    // Only submit work if buffer is not full
+    if (ecg_index < ECG_BUFFER_SIZE) {
+        k_work_submit(&ecg_sampling_work);
+    } else {
+        k_timer_stop(&ecg_sampling_timer);
+        LOG_INF("Finished ECG sampling");
+    }
 }
 
+/*
+void ecg_sampling_callback(struct k_timer *timer_id) {
+    LOG_DBG("ecg_sampling_callback called, ecg_index: %d", ecg_index);
+
+    if (ecg_index >= ECG_BUFFER_SIZE) {
+        k_timer_stop(&ecg_sampling_timer);
+        LOG_INF("Finished ECG sampling");
+        return;
+    }
+
+    // Submit work to perform ADC read in thread context
+    k_work_submit(&ecg_sampling_work);
+}
+*/
 
 int calculate_average_heart_rate(const struct adc_dt_spec *adc) {
     // Ensure ECG sampling is complete
