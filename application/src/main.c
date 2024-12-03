@@ -19,7 +19,7 @@ LOG_MODULE_REGISTER(main, LOG_LEVEL_DBG);
 
 // Constants
 #define MEASUREMENT_DELAY_MS 1000
-#define DEBOUNCE_DELAY_MS 20 // Debounce delay in milliseconds
+//#define DEBOUNCE_DELAY_MS 20 // Debounce delay in milliseconds
 
 // Thread stack sizes and priorities
 #define LOG_THREAD_STACK_SIZE 1024     // Define the size of the thread stack
@@ -204,9 +204,10 @@ static void init_entry(void *o)
 {
     LOG_INF("Init Entry State");
 
-    error_code = 0; // Reset any previous error codes
+    //error_code = 0; // Reset any previous error codes
 
-    // Initialize Bluetooth
+     // Initialize Bluetooth
+     /*
     int ret = bluetooth_init(&bluetooth_callbacks, &remote_service_callbacks);
     if (ret) {
         LOG_ERR("Bluetooth initialization failed (ret = %d)", ret);
@@ -214,29 +215,22 @@ static void init_entry(void *o)
         return;
     }
     LOG_INF("Bluetooth initialized");
-
+*/
     // Start the heartbeat timer (1-second period, 50% duty cycle)
     k_timer_start(&heartbeat_timer, K_NO_WAIT, K_SECONDS(1));
 
     k_timer_start(&heartbeat_timer, K_NO_WAIT, K_SECONDS(1));
     LOG_INF("Heartbeat timer started.");
+    
 
     // Measure battery voltage at startup
-    int32_t battery_voltage = 0;
-    if (measure_battery_voltage(&vadc_battery, &battery_voltage) != 0) {
-        LOG_ERR("Failed to measure battery voltage at startup");
-        error_code |= ERROR_ADC_INIT;
-        smf_set_state(SMF_CTX(&s_obj), &states[Error]);
-        return;
-    }
-
-    LOG_INF("Startup Battery Voltage (mV): %d", battery_voltage);
-
+    //CONFIGURE//INITILAISE//READ
+    
     // Check GPIO port readiness (common for all buttons and LEDs)
     if (!device_is_ready(reset_button.port)) {
         LOG_ERR("GPIO interface not ready.");
         error_code |= ERROR_GPIO_INIT;
-        smf_set_state(SMF_CTX(&s_obj), &states[Error]);
+        //smf_set_state(SMF_CTX(&s_obj), &states[Error]);
         return;
     }
     // configure GPIO buttons
@@ -334,6 +328,18 @@ static void init_entry(void *o)
     gpio_init_callback(&reset_button_cb, reset_button_callback, BIT(reset_button.pin)); // associate callback with GPIO pin
     gpio_add_callback_dt(&reset_button, &reset_button_cb);
 
+
+    int32_t battery_voltage = 0;
+    if (measure_battery_voltage(&vadc_battery, &battery_voltage) != 0) {
+        LOG_ERR("Failed to measure battery voltage at startup");
+        error_code |= ERROR_ADC_INIT;
+        smf_set_state(SMF_CTX(&s_obj), &states[Error]);
+        return;
+    }
+
+    LOG_INF("Startup Battery Voltage (mV): %d", battery_voltage);
+
+
     smf_set_state(SMF_CTX(&s_obj), &states[Idle]);
 }
 
@@ -360,7 +366,7 @@ static void idle_entry(void *o)
 
 static void idle_run(void *o)
 {   
-    LOG_INF("Idle Run State");
+    //LOG_INF("Idle Run State");
 
     if (s_obj.events & RESET_BTN_PRESS) {
         LOG_INF("Reset button pressed, returning to initial state.");
@@ -424,7 +430,8 @@ static void measure_run(void *o) {
     // Check for error event
     if (s_obj.events & ERROR_EVENT) {
         LOG_ERR("Error detected during measurement. Transitioning to ERROR state.");
-        smf_set_state(SMF_CTX(&s_obj), &states[Error]);
+       s_obj.events &= ~ERROR_EVENT; // Clear the error event flag
+       // smf_set_state(SMF_CTX(&s_obj), &states[Error]);
         return;
     }
 
@@ -433,7 +440,7 @@ static void measure_run(void *o) {
     if (ret != 0) {
         LOG_ERR("Failed to read temperature sensor");
         error_code |= ERROR_SENSOR_READ;
-        smf_set_state(SMF_CTX(&s_obj), &states[Error]);
+        //smf_set_state(SMF_CTX(&s_obj), &states[Error]);
         return;
     }
     LOG_INF("Temperature: %d °C", temperature_degC);
@@ -451,7 +458,7 @@ static void measure_run(void *o) {
     } else {
         LOG_ERR("Failed to calculate heart rate");
         error_code |= ERROR_ADC_INIT;
-        smf_set_state(SMF_CTX(&s_obj), &states[Error]);
+        //smf_set_state(SMF_CTX(&s_obj), &states[Error]);
         return;
     }
 
@@ -464,6 +471,7 @@ static void measure_run(void *o) {
         LOG_INF("Heart Rate LED blink started with %d ms ON time and %d ms period", on_time_ms, period_ms);
     }
 
+/*
     // Step 5: Send BLE Notifications
     // Send Temperature Notification
     ret = send_BT_notification(current_conn, (uint8_t *)&temperature_degC, sizeof(temperature_degC));
@@ -481,6 +489,7 @@ static void measure_run(void *o) {
     } else {
     LOG_ERR("No active BLE connection. Heart rate notification skipped.");
     }
+    */
 
     // Transition back to IDLE
     smf_set_state(SMF_CTX(&s_obj), &states[Idle]);
@@ -651,7 +660,7 @@ void error_thread(void) {
 
         if (s_obj.events & ERROR_EVENT) {
             LOG_ERR("Error detected, entering error state.");
-            smf_set_state(SMF_CTX(&s_obj), &states[Error]);
+            //smf_set_state(SMF_CTX(&s_obj), &states[Error]);
         }
 
     }
@@ -717,23 +726,57 @@ void error_blink_handler(struct k_timer *timer_id) {
 
 void battery_measure_callback(struct k_timer *timer_id) {
     if (SMF_CTX(&s_obj)->current == &states[Idle]) {
-        int32_t battery_voltage = 0;
+        battery_voltage = 0;
 
         if (measure_battery_voltage(&vadc_battery, &battery_voltage) == 0) {
             LOG_INF("Battery Voltage: %d mV", battery_voltage);
-            bluetooth_set_battery_level(battery_voltage); // BLE notification
+            // bluetooth_set_battery_level(battery_voltage); // BLE notification
 
             // Adjust LED brightness based on battery level
             adjust_led_brightness(&pwm_battery, battery_voltage);
         } else {
             LOG_ERR("Failed to measure battery voltage");
             error_code |= ERROR_ADC_INIT;
-            smf_set_state(SMF_CTX(&s_obj), &states[Error]);
+            //smf_set_state(SMF_CTX(&s_obj), &states[Error]);
         }
     }
 }
 
 int measure_battery_voltage(const struct adc_dt_spec *adc, int32_t *voltage_mv) {
+    if (!device_is_ready(adc->dev)) {
+        LOG_ERR("ADC device not ready");
+        return -ENODEV; // Device not ready error
+    }
+
+    int16_t adc_sample = 0;  // Use int16_t for proper alignment
+
+    // Clear the buffer (though this is usually unnecessary)
+    memset(&adc_sample, 0, sizeof(adc_sample));
+
+    struct adc_sequence sequence = {
+        .channels    = BIT(adc->channel_id),
+        .buffer      = &adc_sample, // Use the address of adc_sample
+        .buffer_size = sizeof(adc_sample),
+        .resolution  = adc->resolution,
+    };
+
+    int ret = adc_read(adc->dev, &sequence);
+    if (ret != 0) {
+        LOG_ERR("ADC read failed: %d", ret);
+        return ret; // Return the error code from ADC read
+    }
+
+    // Convert raw ADC value to millivolts
+    int32_t raw_value = adc_sample;
+    *voltage_mv = raw_value * adc->channel_cfg.reference / (1 << adc->resolution);
+
+    LOG_INF("Battery voltage: %d mV", *voltage_mv);
+    return 0;
+}
+
+/*
+int measure_battery_voltage(const struct adc_dt_spec *adc, int32_t *voltage_mv) {
+    //configure
     
     if (!device_is_ready(adc->dev)) {
         LOG_ERR("ADC device not ready");
@@ -745,7 +788,7 @@ int measure_battery_voltage(const struct adc_dt_spec *adc, int32_t *voltage_mv) 
         .buffer      = voltage_mv, // Store result directly in voltage_mv
         .buffer_size = sizeof(*voltage_mv),
         .resolution  = adc->resolution,
-    };
+    };//define out
 
     int ret = adc_read(adc->dev, &sequence);
     if (ret != 0) {
@@ -759,6 +802,7 @@ int measure_battery_voltage(const struct adc_dt_spec *adc, int32_t *voltage_mv) 
     LOG_INF("Battery voltage: %d mV", *voltage_mv);
     return 0;
 }
+*/
 
 void adjust_led_brightness(const struct pwm_dt_spec *pwm_led, int32_t voltage_mv) {
     
@@ -842,10 +886,12 @@ void measure_button_callback(const struct device *dev, struct gpio_callback *cb,
     uint32_t current_time = k_uptime_get_32(); // Get current time in milliseconds
 
     // Check if enough time has passed since the last valid press
+    /*
     if ((current_time - last_press_time) < DEBOUNCE_DELAY_MS) {
         LOG_DBG("Button press ignored due to debounce.");
         return; // Ignore the button press
     }
+    */
 
     // Process the button press
     if (SMF_CTX(&s_obj)->current == &states[Measure]) {
