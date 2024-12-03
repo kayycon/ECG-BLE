@@ -34,7 +34,7 @@ LOG_MODULE_REGISTER(main, LOG_LEVEL_DBG);
 
 // ECG configurations
 #define BLINK_TIMER_INTERVAL_MS 500
-#define ECG_SAMPLE_RATE 10 // Sampling rate in Hz
+#define ECG_SAMPLE_RATE 100 // Sampling rate in Hz
 #define ECG_BUFFER_SIZE (ECG_SAMPLE_RATE * 30) // 30 seconds of data (need to change)
 #define R_PEAK_THRESHOLD 2000 // Threshold for R peak detection
 #define ECG_THREAD_STACK_SIZE 2048
@@ -115,6 +115,7 @@ struct k_work_q ecg_workqueue;
 // function declarations
 int measure_battery_voltage(const struct adc_dt_spec *adc, int32_t *voltage_mv);
 int calculate_average_heart_rate(const struct adc_dt_spec *adc);
+void apply_moving_average_filter(const int16_t *input, int16_t *output, size_t length, size_t window_size);
 
 //volatile atomic_t error_events = 0;
 static const struct smf_state states[];
@@ -138,6 +139,7 @@ void hrate_blink_handler(struct k_timer *hrate_blink_timer);
 void error_blink_handler(struct k_timer *error_blink_timer);
 
 void battery_measure_work_handler(struct k_work *work);
+//void apply_moving_average_filter(const int16_t *input, int16_t *output, size_t length, size_t window_size);
 
 // Forward declaration of the work handler function
 void ecg_sampling_work_handler(struct k_work *work);
@@ -523,7 +525,7 @@ static void measure_run(void *o) {
     } else {
         LOG_ERR("Failed to calculate heart rate");
         error_code |= ERROR_ADC_INIT;
-        //smf_set_state(SMF_CTX(&s_obj), &states[Error]);
+        smf_set_state(SMF_CTX(&s_obj), &states[Error]);
         return;
     }
 
@@ -891,37 +893,6 @@ int measure_battery_voltage(const struct adc_dt_spec *adc, int32_t *voltage_mv) 
     return 0;
 }
 
-/*
-int measure_battery_voltage(const struct adc_dt_spec *adc, int32_t *voltage_mv) {
-    //configure
-    
-    if (!device_is_ready(adc->dev)) {
-        LOG_ERR("ADC device not ready");
-        return -ENODEV; // Device not ready error
-    }
-
-    struct adc_sequence sequence = {
-        .channels    = BIT(adc->channel_id),
-        .buffer      = voltage_mv, // Store result directly in voltage_mv
-        .buffer_size = sizeof(*voltage_mv),
-        .resolution  = adc->resolution,
-    };//define out
-
-    int ret = adc_read(adc->dev, &sequence);
-    if (ret != 0) {
-        LOG_ERR("ADC read failed: %d", ret);
-        return ret; // Return the error code from ADC read
-    }
-
-    // Convert raw ADC value to millivolts
-    *voltage_mv = (*voltage_mv * adc->channel_cfg.reference) / (1 << adc->resolution);
-
-    LOG_INF("Battery voltage: %d mV", *voltage_mv);
-    return 0;
-}
-*/
-
-
 void adjust_led_brightness(const struct pwm_dt_spec *pwm_led, int32_t voltage_mv) {
     
     // Calculate the duty cycle as a percentage of the maximum battery voltage
@@ -977,6 +948,12 @@ void ecg_sampling_work_handler(struct k_work *work) {
         error_code |= ERROR_ADC_INIT;
         atomic_set_bit(&error_events, 0);
     }
+
+    // Check if buffer is full after incrementing ecg_index
+    if (ecg_index >= ECG_BUFFER_SIZE) {
+        k_timer_stop(&ecg_sampling_timer);
+        LOG_INF("Finished ECG sampling");
+    }
 }
 
 void ecg_sampling_callback(struct k_timer *timer_id) {
@@ -989,27 +966,16 @@ void ecg_sampling_callback(struct k_timer *timer_id) {
     }
 }
 
-/*
-void ecg_sampling_callback(struct k_timer *timer_id) {
-    LOG_DBG("ecg_sampling_callback called, ecg_index: %d", ecg_index);
-
-    if (ecg_index >= ECG_BUFFER_SIZE) {
-        k_timer_stop(&ecg_sampling_timer);
-        LOG_INF("Finished ECG sampling");
-        return;
-    }
-
-    // Submit work to perform ADC read in thread context
-    k_work_submit(&ecg_sampling_work);
-}
-*/
-
 int calculate_average_heart_rate(const struct adc_dt_spec *adc) {
     // Ensure ECG sampling is complete
     if (ecg_index < ECG_BUFFER_SIZE) {
         LOG_ERR("ECG sampling incomplete");
         return -1;
     }
+
+    // Apply moving average filter
+    //int16_t filtered_ecg[ECG_BUFFER_SIZE];
+    //apply_moving_average_filter(ecg_buffer, filtered_ecg, ECG_BUFFER_SIZE, 5);
 
     size_t r_peak_count = 0;
     //int16_t threshold = 200; // threshold for R-peak detection
