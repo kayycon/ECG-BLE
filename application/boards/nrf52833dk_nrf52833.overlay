@@ -9,8 +9,8 @@
 
         // Button aliases
         measurebutton = &button0;  // Measure button corresponds to SW1 on the board
-        clearbutton = &button2; // Clear button corresponds to SW2 on the board
-        resetbutton = &button3;  // Reset button corresponds to SW3 on the board
+        clearbutton = &button1; // Clear button corresponds to SW2 on the board
+        resetbutton = &button2;  // Reset button corresponds to SW3 on the board
 
         // ADC channel aliases
 
@@ -19,7 +19,7 @@
 
 
         // PWM channel aliases
-        pwm1 = &pwmbatt;
+       pwm1 = &pwmbatt;
     };
 
 zephyr,user {
@@ -51,7 +51,7 @@ pwm {
         zephyr,input-positive = <NRF_SAADC_AIN0>; // Input pin P0.02
         zephyr,resolution = <12>; // 10-bit resolution
         //zephyr,oversampling = <4>;
-        zephyr,vref-mv = <750>;
+        //zephyr,vref-mv = <750>; 
     };
 
     vadchr: channel@2 {
@@ -62,12 +62,11 @@ pwm {
         zephyr,input-positive = <NRF_SAADC_AIN2>;  // Positive input on AIN2; PO.04
         zephyr,input-negative = <NRF_SAADC_AIN4>;  // Negative input on AIN4; PO.28
         zephyr,resolution = <12>;  // 12-bit resolution
-        zephyr,vref-mv = <750>;
+        //zephyr,vref-mv = <750>;
     };
 
     status = "okay"; // Enable the ADC
 };
-  
 
 &pwm0 {
     compatible = "nordic,nrf-pwm"; // PWM compatible
@@ -96,9 +95,6 @@ pwm {
         };
     };
 }; 
-
- 
-
 
 /* I2C Pin Mapping
 SCK: P0.27

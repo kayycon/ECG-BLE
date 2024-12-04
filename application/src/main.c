@@ -69,7 +69,6 @@ K_EVENT_DEFINE(errors);
 #define ERROR_BLE_INIT      BIT(2)
 #define ERROR_GPIO_INIT     BIT(3)
 #define ERROR_SENSOR_READ   BIT(4)
-#define ERROR_ECG_INCOMPLETE BIT(5)
 
 // Declare the thread stack
 K_THREAD_STACK_DEFINE(log_thread_stack, LOG_THREAD_STACK_SIZE);
@@ -93,28 +92,29 @@ const struct gpio_dt_spec hrate_led = GPIO_DT_SPEC_GET(DT_ALIAS(measure), gpios)
 const struct gpio_dt_spec error_led = GPIO_DT_SPEC_GET(DT_ALIAS(error), gpios);
 
 // adc structs storing all the DT parameters
-static const struct adc_dt_spec vadc_battery = ADC_DT_SPEC_GET_BY_ALIAS(vadcbatt);
+static const struct adc_dt_spec vadc_batt = ADC_DT_SPEC_GET_BY_ALIAS(vadcbatt);
 static const struct adc_dt_spec vadc_hrate = ADC_DT_SPEC_GET_BY_ALIAS(vadchr);
 
 // pwm structs defined based on DT aliases
 static const struct pwm_dt_spec pwm_batt = PWM_DT_SPEC_GET(DT_ALIAS(pwm1));
 
 // global variables
-//int16_t buf0, buf1;
-//static int16_t buf2[SAMPLES_IN_BUFFER];
 int32_t temperature_degC;
 int32_t error_code = 0;  // Global variable to store error codes
 int32_t battery_voltage = 0; // Global variable to store the battery voltage
-float blink_frequency, on_time_seconds, pwm_duty, pwm_duty_max;
 volatile uint16_t ecg_index = 0;
+float blink_frequency, on_time_seconds, pwm_duty, pwm_duty_max;
 int16_t ecg_buffer[ECG_BUFFER_SIZE]; // Global buffer to store ECG data
 int32_t average_hr = 0; // Global variable to store the average heart rate
 static uint32_t last_press_time = 0; // Variable to store the last press time
 struct k_thread ecg_thread_data;
 struct k_work_q ecg_workqueue;
+int32_t val_mv0, val_mv1;
 
 // function declarations
+
 int measure_battery_voltage(const struct adc_dt_spec *adc, int32_t *voltage_mv);
+//int calculate_average_heart_rate(const struct adc_dt_spec *adc);
 int calculate_average_heart_rate(const struct adc_dt_spec *adc, size_t sample_count);
 void apply_moving_average_filter(const int16_t *input, int16_t *output, size_t length, size_t window_size);
 
@@ -220,25 +220,47 @@ struct led error_led_status = {
     .toggled = false,
     .saved_state = false
 };
+int16_t buf1, buf2;
+
+//int16_t buf1[ECG_BUFFER_SIZE]; // Buffer for the first sequence
+//int16_t buf2[ECG_BUFFER_SIZE]; // Buffer for the second sequence
+
+struct adc_sequence_options options = {
+        .interval_us = 100,
+        .extra_samplings = 0,  // -1 b/c first sample is already in the buffer
+        .callback = NULL,  // called after all extra samples are collected
+};
+
+struct adc_sequence sequence0 = {
+    //.options = &options,  // add the options to the sequence
+    .buffer = &buf1,
+    .buffer_size = sizeof(buf1), // bytes
+    .oversampling = 0,   // No oversampling
+};
+
+struct adc_sequence sequence1 = {
+    .buffer = &buf2,
+    .buffer_size = sizeof(buf2), // bytes >> change this as it will be an array
+};
 
 // Init state
 static void init_entry(void *o)
 {
     LOG_INF("Init Entry State");
 
-    // populate CB struct with information about the CB function and pin
-    gpio_init_callback(&measure_button_cb, measure_button_callback, BIT(measure_button.pin)); // associate callback with GPIO pin
-    gpio_add_callback_dt(&measure_button, &measure_button_cb);
+    //error_code = 0; // Reset any previous error codes
 
-    gpio_init_callback(&clear_button_cb, clear_button_callback, BIT(clear_button.pin)); // associate callback with GPIO pin
-    gpio_add_callback_dt(&clear_button, &clear_button_cb);
-
-    gpio_init_callback(&reset_button_cb, reset_button_callback, BIT(reset_button.pin)); // associate callback with GPIO pin
-    gpio_add_callback_dt(&reset_button, &reset_button_cb);
-
-    int err = gpio_pin_configure_dt(&measure_button, GPIO_INPUT);
-    err |= gpio_pin_configure_dt(&clear_button, GPIO_INPUT);
-    err |= gpio_pin_configure_dt(&reset_button, GPIO_INPUT);
+     // Initialize Bluetooth
+     /*
+    int ret = bluetooth_init(&bluetooth_callbacks, &remote_service_callbacks);
+    if (ret) {
+        LOG_ERR("Bluetooth initialization failed (ret = %d)", ret);
+        smf_set_state(SMF_CTX(&s_obj), &states[Error]);
+        return;
+    }
+    LOG_INF("Bluetooth initialized");
+*/
+    // Start the heartbeat timer (1-second period, 50% duty cycle)
 
     //k_timer_start(&heartbeat_timer, K_NO_WAIT, K_SECONDS(1));
     k_timer_start(&heartbeat_timer, K_MSEC(BLINK_TIMER_INTERVAL_MS), K_MSEC(BLINK_TIMER_INTERVAL_MS));
@@ -248,10 +270,6 @@ static void init_entry(void *o)
     // Measure battery voltage at startup
     //CONFIGURE//INITILAISE//READ
     
-    if (!device_is_ready(vadc_battery.dev)) {
-    LOG_ERR("ADC device for battery is not ready.");
-    return;
-}
     // Check GPIO port readiness (common for all buttons and LEDs)
     if (!device_is_ready(reset_button.port)) {
         LOG_ERR("GPIO interface not ready.");
@@ -259,7 +277,19 @@ static void init_entry(void *o)
         //smf_set_state(SMF_CTX(&s_obj), &states[Error]);
         return;
     }
-
+    // configure GPIO buttons
+    int err = gpio_pin_configure_dt(&measure_button, GPIO_INPUT);
+    if (err < 0) {
+        LOG_ERR("Cannot configure acquire button.");
+    }
+    err = gpio_pin_configure_dt(&clear_button, GPIO_INPUT);
+    if (err < 0) {
+        LOG_ERR("Cannot configure clear button.");
+    }
+    err = gpio_pin_configure_dt(&reset_button, GPIO_INPUT);
+    if (err < 0) {
+        LOG_ERR("Cannot configure reset button.");
+    }
     // configure GPIO LEDs
     err = gpio_pin_configure_dt(&heartbeat_led, GPIO_OUTPUT | GPIO_ACTIVE_LOW);
     if (err < 0) {
@@ -288,8 +318,8 @@ static void init_entry(void *o)
     LOG_INF("ECG workqueue started with priority %d", ECG_WORKQUEUE_PRIORITY);
 
     // Check that the ADC interface is ready
-    if (!device_is_ready(vadc_hrate.dev)) {
-    LOG_ERR("ADC controller device for heart rate not ready");
+    if (!device_is_ready(vadc_batt.dev)) {
+    LOG_ERR("ADC controller device for battery not ready");
     error_code |= ERROR_ADC_INIT;
     smf_set_state(SMF_CTX(&s_obj), &states[Error]);
     return;
@@ -297,13 +327,22 @@ static void init_entry(void *o)
 
     // Configure the ADC channels
     // Ensure that adc_channel_setup_dt is called for both ADC channels
-    err = adc_channel_setup_dt(&vadc_battery);
+    err = adc_channel_setup_dt(&vadc_batt);
     if (err < 0) {
         LOG_ERR("Could not setup ADC channel for battery (%d)", err);
         error_code |= ERROR_ADC_INIT;
         smf_set_state(SMF_CTX(&s_obj), &states[Error]);
         return;
     }
+
+    // Check that the ADC interface is ready
+    if (!device_is_ready(vadc_hrate.dev)) {
+    LOG_ERR("ADC controller device for heart rate not ready");
+    error_code |= ERROR_ADC_INIT;
+    smf_set_state(SMF_CTX(&s_obj), &states[Error]);
+    return;
+    }
+
     err = adc_channel_setup_dt(&vadc_hrate);
     if (err < 0) {
         LOG_ERR("Could not setup ADC channel for heart rate (%d)", err);
@@ -312,18 +351,8 @@ static void init_entry(void *o)
         return;
     }
 
-    void test_adc_read(void) {
-    int32_t voltage_mv = 0;
-    int ret = measure_battery_voltage(&vadc_battery, &voltage_mv);
-    if (ret == 0) {
-        LOG_INF("Test ADC read successful, voltage: %d mV", voltage_mv);
-    } else {
-        LOG_ERR("Test ADC read failed: %d", ret);
-    }
-}
-
     // check that the PWM controller is ready
-  
+    
     if (!device_is_ready(pwm_batt.dev))  {
         LOG_ERR("PWM device %s is not ready.", pwm_batt.dev->name);
         // return -1;
@@ -351,10 +380,19 @@ static void init_entry(void *o)
     if (err < 0) {
         LOG_ERR("Cannot attach callback to sw3.");
     }
+    // populate CB struct with information about the CB function and pin
+    gpio_init_callback(&measure_button_cb, measure_button_callback, BIT(measure_button.pin)); // associate callback with GPIO pin
+    gpio_add_callback_dt(&measure_button, &measure_button_cb);
+
+    gpio_init_callback(&clear_button_cb, clear_button_callback, BIT(clear_button.pin)); // associate callback with GPIO pin
+    gpio_add_callback_dt(&clear_button, &clear_button_cb);
+
+    gpio_init_callback(&reset_button_cb, reset_button_callback, BIT(reset_button.pin)); // associate callback with GPIO pin
+    gpio_add_callback_dt(&reset_button, &reset_button_cb);
 
 
     int32_t battery_voltage = 0;
-    if (measure_battery_voltage(&vadc_battery, &battery_voltage) != 0) {
+    if (measure_battery_voltage(&vadc_batt, &battery_voltage) != 0) {
         LOG_ERR("Failed to measure battery voltage at startup");
         error_code |= ERROR_ADC_INIT;
         smf_set_state(SMF_CTX(&s_obj), &states[Error]);
@@ -362,6 +400,7 @@ static void init_entry(void *o)
     }
 
     LOG_INF("Startup Battery Voltage (mV): %d", battery_voltage);
+
 
     smf_set_state(SMF_CTX(&s_obj), &states[Idle]);
 }
@@ -435,19 +474,6 @@ static void measure_entry(void *o) {
     // Reset ECG buffer index
     ecg_index = 0;
 
-    /*
-    k_thread_create(
-        &ecg_thread_data,
-        ecg_thread_stack,
-        K_THREAD_STACK_SIZEOF(ecg_thread_stack),
-        ecg_sampling_thread,
-        NULL, NULL, NULL,
-        ECG_THREAD_PRIORITY,
-        0,
-        K_NO_WAIT
-    );
-    */
-
     // Start ECG sampling timer (sampling every 10 ms for 30 seconds)
     k_timer_start(&ecg_sampling_timer, K_NO_WAIT, K_MSEC(10)); // 100 Hz sampling rate
 
@@ -464,32 +490,11 @@ static void measure_run(void *o) {
     LOG_INF("Measure Run State");
 
     // Check for error event
+    //if (s_obj.events & ERROR_EVENT) {
     if (atomic_test_and_clear_bit(&error_events, 0)) {
         LOG_ERR("Error detected during measurement. Transitioning to ERROR state.");
-        //s_obj.events &= ~ERROR_EVENT; // Clear the error event flag
+       //s_obj.events &= ~ERROR_EVENT; // Clear the error event flag
         smf_set_state(SMF_CTX(&s_obj), &states[Error]);
-        return;
-    }
-
-    // Check if ECG sampling is complete
-    if (ecg_index >= ECG_BUFFER_SIZE) {
-        LOG_INF("ECG sampling complete.");
-        // Proceed to next steps
-    } else if (k_timer_status_get(&ecg_sampling_stop_timer) > 0) {
-        LOG_INF("ECG sampling time expired. Collected %d samples.", ecg_index);
-        k_timer_stop(&ecg_sampling_timer);
-
-        if (ecg_index < ECG_SAMPLE_RATE * 30) { // Less than 30 seconds of data
-            LOG_ERR("Insufficient ECG data collected.");
-            error_code |= ERROR_ECG_INCOMPLETE;
-            atomic_set_bit(&error_events, 0);
-            smf_set_state(SMF_CTX(&s_obj), &states[Error]);
-            return;
-        }
-        // Proceed with processing the data collected
-    } else {
-        // Sampling still in progress
-        LOG_INF("ECG sampling not yet complete. ecg_index=%d/%d", ecg_index, ECG_BUFFER_SIZE);
         return;
     }
 
@@ -498,11 +503,16 @@ static void measure_run(void *o) {
     if (ret != 0) {
         LOG_ERR("Failed to read temperature sensor");
         error_code |= ERROR_SENSOR_READ;
-        atomic_set_bit(&error_events, 0);  // Set error event
-        smf_set_state(SMF_CTX(&s_obj), &states[Error]);
+        //smf_set_state(SMF_CTX(&s_obj), &states[Error]);
         return;
     }
     LOG_INF("Temperature: %d °C", temperature_degC);
+
+    // Step 2: Ensure ECG Sampling is Complete
+    if (ecg_index < ECG_BUFFER_SIZE) {
+        LOG_INF("ECG sampling not yet complete. Waiting...");
+        return;  // Wait for ECG sampling to complete
+    }
 
     // Step 3: Calculate Average Heart Rate
     ret = calculate_average_heart_rate(&vadc_hrate, ecg_index);
@@ -567,10 +577,10 @@ static void error_entry(void *o) {
     LOG_INF("Started all LED timers in Error State.");
 
     // Notify Error Code via BLE
-    //int ret = send_BT_notification(current_conn, (uint8_t *)&error_code, sizeof(error_code));
-    //if (ret) {
-    //    LOG_ERR("Failed to send error notification");
-    //}
+    int ret = send_BT_notification(current_conn, (uint8_t *)&error_code, sizeof(error_code));
+    if (ret) {
+        LOG_ERR("Failed to send error notification");
+    }
 }
 
 static void error_run(void *o)
@@ -606,6 +616,7 @@ static const struct smf_state states[] = {
 
 int main(void) {
 
+    //k_thread_priority_set(k_current_get(), 2); // Set to priority 2
 
     // Initialize state machine context
     smf_set_initial(SMF_CTX(&s_obj), &states[Init]); 
@@ -817,6 +828,7 @@ void error_blink_handler(struct k_timer *timer_id) {
     LOG_DBG("Error LED toggled to %s", led_on ? "ON" : "OFF");
 }
 
+
 void battery_measure_callback(struct k_timer *timer_id) {
     if (SMF_CTX(&s_obj)->current == &states[Idle]) {
         battery_voltage = 0;
@@ -826,9 +838,8 @@ void battery_measure_callback(struct k_timer *timer_id) {
 }
 
 void battery_measure_work_handler(struct k_work *work) {
-    battery_voltage = 0;
 
-    if (measure_battery_voltage(&vadc_battery, &battery_voltage) == 0) {
+    if (measure_battery_voltage(&vadc_batt, &battery_voltage) == 0) {
         LOG_INF("Battery Voltage: %d mV", battery_voltage);
         // bluetooth_set_battery_level(battery_voltage); // BLE notification
 
@@ -845,36 +856,29 @@ void battery_measure_work_handler(struct k_work *work) {
 int measure_battery_voltage(const struct adc_dt_spec *adc, int32_t *voltage_mv) {
     if (!device_is_ready(adc->dev)) {
         LOG_ERR("ADC device not ready");
-        return -ENODEV;
+        return -ENODEV; // Device not ready error
     }
 
-    int16_t adc_sample = 0;  // Use int16_t for proper alignment
-    memset(&adc_sample, 0, sizeof(adc_sample));
+    // Add a delay before adc_read
+    k_sleep(K_MSEC(10));
 
-    struct adc_sequence sequence = {
-        .channels    = BIT(adc->channel_id),
-        .buffer      = &adc_sample,  // Use the address of adc_sample
-        .buffer_size = sizeof(adc_sample),
-        .resolution  = adc->resolution,
-    };
-
-    int ret = adc_read(adc->dev, &sequence);
+    (void)adc_sequence_init_dt(&vadc_batt, &sequence0);
+    int ret = adc_read(vadc_batt.dev, &sequence0);
     if (ret < 0) {
-        LOG_ERR("ADC read failed: %d", ret);
-        return ret;
+        LOG_ERR("Could not read ADC: %d", ret);
+    } else {
+        LOG_DBG("Raw ADC Buffer: %d", buf1);
     }
 
-    // Convert raw ADC value to millivolts using Zephyr API
-    int32_t result_mv;
-    result_mv = adc_raw_to_millivolts_dt(adc, adc_sample);
+    // Convert raw ADC value to millivolts
+    int32_t mv = buf1;
+    ret = adc_raw_to_millivolts_dt(&vadc_batt, &mv);
     if (ret < 0) {
-        LOG_ERR("Failed to convert raw ADC value to millivolts: %d", ret);
-        return ret;
-    }
+        LOG_ERR("Buffer cannot be converted to mV; returning raw buffer value.");
+    } else {
+    LOG_INF("Battery voltage: %d", mv);
+}
 
-    *voltage_mv = result_mv;
-    LOG_INF("Battery voltage: %d mV", *voltage_mv);
-    
     return 0;
 }
 
@@ -902,27 +906,24 @@ void adjust_led_brightness(const struct pwm_dt_spec *pwm_led, int32_t voltage_mv
     }
 }
 
-
 void ecg_sampling_work_handler(struct k_work *work) {
-    int16_t adc_sample;
+    LOG_DBG("ecg_sampling_work_handler called");
 
-    struct adc_sequence sequence = {
-        .channels = BIT(vadc_hrate.channel_id),
-        .buffer = &adc_sample,
-        .buffer_size = sizeof(adc_sample),
-        .resolution = vadc_hrate.resolution,
-    };
+    // Clear the sample buffer
+    buf2 = 0;
 
-    int ret = adc_read(vadc_hrate.dev, &sequence);
+    int ret = adc_read(vadc_hrate.dev, &sequence1);
     if (ret == 0) {
-        int32_t result_mv;
-        result_mv = adc_raw_to_millivolts_dt(&vadc_hrate, adc_sample);
-        if (ret < 0) {
-            LOG_ERR("Failed to convert raw ADC value to millivolts: %d", ret);
-            return;
+        if (ecg_index < ECG_BUFFER_SIZE - 1) {
+            ecg_buffer[ecg_index] = buf2;
+            ecg_index++;
+            LOG_DBG("ADC read success, ecg_sample=%d, ecg_index=%d", buf2, ecg_index);
         }
-        if (ecg_index < ECG_BUFFER_SIZE) {
-            ecg_buffer[ecg_index++] = (int16_t)result_mv;
+
+        // Check if buffer is full
+        if (ecg_index == ECG_BUFFER_SIZE) {
+            k_timer_stop(&ecg_sampling_timer);
+            LOG_INF("Finished ECG sampling");
         }
     } else {
         LOG_ERR("Failed to sample ECG, adc_read returned: %d", ret);
@@ -930,13 +931,8 @@ void ecg_sampling_work_handler(struct k_work *work) {
         error_code |= ERROR_ADC_INIT;
         atomic_set_bit(&error_events, 0);
     }
-
-    // Check if buffer is full after incrementing ecg_index
-    if (ecg_index >= ECG_BUFFER_SIZE) {
-        k_timer_stop(&ecg_sampling_timer);
-        LOG_INF("Finished ECG sampling");
-    }
 }
+
 
 void ecg_sampling_callback(struct k_timer *timer_id) {
     // Only submit work if buffer is not full
@@ -947,6 +943,7 @@ void ecg_sampling_callback(struct k_timer *timer_id) {
         LOG_INF("Finished ECG sampling");
     }
 }
+
 
 int calculate_average_heart_rate(const struct adc_dt_spec *adc, size_t sample_count) {
 
