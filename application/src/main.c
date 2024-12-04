@@ -101,7 +101,7 @@ K_THREAD_STACK_DEFINE(ecg_workqueue_stack, ECG_WORKQUEUE_STACK_SIZE);
 
 // function declarations
 const struct device *const temp_sensor = DEVICE_DT_GET_ONE(microchip_mcp9808);
-void adjust_led_brightness(const struct pwm_dt_spec *pwm_led, int32_t battery_voltage_mv);
+void adjust_led_brightness(const struct pwm_dt_spec *pwm1, int32_t battery_voltage_mv);
 
 // button gpio structs
 const struct gpio_dt_spec measure_button = GPIO_DT_SPEC_GET(DT_ALIAS(measurebutton), gpios);
@@ -119,7 +119,7 @@ static const struct adc_dt_spec vadc_batt = ADC_DT_SPEC_GET_BY_ALIAS(vadcbatt);
 static const struct adc_dt_spec vadc_hrate = ADC_DT_SPEC_GET_BY_ALIAS(vadchr);
 
 // pwm structs defined based on DT aliases
-static const struct pwm_dt_spec pwm_batt = PWM_DT_SPEC_GET(DT_ALIAS(pwm1));
+static const struct pwm_dt_spec pwm1 = PWM_DT_SPEC_GET(DT_ALIAS(pwm1));
 
 // global variables
 int32_t temperature_degC;
@@ -269,7 +269,6 @@ static void init_entry(void *o)
     k_timer_start(&heartbeat_timer, K_MSEC(BLINK_TIMER_INTERVAL_MS), K_MSEC(BLINK_TIMER_INTERVAL_MS));
     LOG_INF("Heartbeat timer started.");
     
-
     // Measure battery voltage at startup
     //CONFIGURE//INITILAISE//READ
     
@@ -355,11 +354,11 @@ static void init_entry(void *o)
     }
 
     // check that the PWM controller is ready
-    
-    if (!device_is_ready(pwm_batt.dev))  {
-        LOG_ERR("PWM device %s is not ready.", pwm_batt.dev->name);
-        // return -1;
-    }
+    if (!device_is_ready(pwm1.dev))  {
+    LOG_ERR("PWM device %s is not ready.", pwm1.dev->name);
+    //return -1;
+}
+
 
     // check that the temp sensor is ready
     if (!device_is_ready(temp_sensor)) {
@@ -737,43 +736,6 @@ void error_thread(void) {
     }
 }
 
-/*
-void ecg_sampling_thread(void *arg1, void *arg2, void *arg3) {
-    while (1) {
-        if (ecg_index >= ECG_BUFFER_SIZE) {
-            LOG_INF("Finished ECG sampling");
-            // Optionally signal completion to the main thread
-            break;
-        }
-
-        int16_t ecg_sample = 0;
-
-        // Read ECG signal using ADC
-        struct adc_sequence sequence = {
-            .channels = BIT(vadc_hrate.channel_id),
-            .buffer = &ecg_sample,
-            .buffer_size = sizeof(ecg_sample),
-            .resolution = vadc_hrate.resolution,
-        };
-
-        int ret = adc_read(vadc_hrate.dev, &sequence);
-        if (ret == 0) {
-            ecg_buffer[ecg_index++] = ecg_sample;
-            LOG_DBG("ecg_sample=%d, ecg_index=%d", ecg_sample, ecg_index);
-        } else {
-            LOG_ERR("Failed to sample ECG, adc_read returned: %d", ret);
-            error_code |= ERROR_ADC_INIT;
-            atomic_set_bit(&error_events, 0);  // Post error event
-            break;
-        }
-
-        // Sleep for the sampling interval
-        k_sleep(K_MSEC(10));  // 100 Hz sampling rate
-    }
-}
-*/
-
-
 // Create a thread for the log and error handlers
 K_THREAD_DEFINE(log_thread_id, LOG_THREAD_STACK_SIZE, log_thread, NULL, NULL, NULL, LOG_THREAD_PRIORITY, 0, 0);
 K_THREAD_DEFINE(error_thread_id, ERROR_THREAD_STACK_SIZE, error_thread, NULL, NULL, NULL, ERROR_THREAD_PRIORITY, 0, 0);
@@ -847,11 +809,11 @@ void battery_measure_work_handler(struct k_work *work) {
         // bluetooth_set_battery_level(battery_voltage); // BLE notification
 
         // Adjust LED brightness based on battery level
-        adjust_led_brightness(&pwm_batt, battery_voltage);
+        adjust_led_brightness(&pwm1, battery_voltage); 
     } else {
         LOG_ERR("Failed to measure battery voltage");
         error_code |= ERROR_ADC_INIT;
-        // smf_set_state(SMF_CTX(&s_obj), &states[Error]);
+        smf_set_state(SMF_CTX(&s_obj), &states[Error]);
     }
 }
 
@@ -882,14 +844,15 @@ int measure_battery_voltage(const struct adc_dt_spec *adc, int32_t *voltage_mv) 
     LOG_INF("Battery voltage: %d", voltage_mv);
 }
 
-    //return 0;
+    return 0;
 }
 
+void adjust_led_brightness(const struct pwm_dt_spec *pwm1, int32_t voltage_mv) {
+    // Convert voltage from millivolts to volts
+    float voltage_v = voltage_mv / 1000.0f; // Convert mV to V
 
-void adjust_led_brightness(const struct pwm_dt_spec *pwm_led, int32_t voltage_mv) {
-    
     // Calculate the duty cycle as a percentage of the maximum battery voltage
-    uint32_t duty_cycle_percentage = (voltage_mv * 100) / MAX_BATTERY_VOLTAGE_MV; // Scale 0–100%
+    int32_t duty_cycle_percentage = (voltage_mv / 3.7f) * 100; // Scale 0–100%
 
     // Ensure the duty cycle percentage is within bounds
     if (duty_cycle_percentage > 100) {
@@ -902,8 +865,9 @@ void adjust_led_brightness(const struct pwm_dt_spec *pwm_led, int32_t voltage_mv
     uint32_t duty_cycle = (duty_cycle_percentage * PWM_PERIOD_USEC) / 100; // Convert to PWM period
 
     // Set the PWM with the calculated duty cycle
-    if (pwm_set_dt(pwm_led, PWM_PERIOD_USEC, duty_cycle) != 0) {
-        LOG_ERR("Failed to set PWM for battery LED");
+    int ret = pwm_set_dt(pwm1, PWM_PERIOD_USEC, duty_cycle);
+    if (ret != 0) {
+        LOG_ERR("Failed to set PWM for battery LED: %d", ret);
     } else {
         LOG_DBG("Battery LED brightness set to %d%%", duty_cycle_percentage);
     }

@@ -19,7 +19,7 @@
 
 
         // PWM channel aliases
-       pwm1 = &pwmbatt;
+        pwm1 = &pwmch1;
     };
 
 zephyr,user {
@@ -28,13 +28,11 @@ zephyr,user {
 
 pwm {
     compatible = "pwm-leds";
-
-    pwmbatt: pwm_1 {
-        pwms = < &pwm0 0 PWM_MSEC(1) PWM_POLARITY_INVERTED >;  // PWM channel 0 is used for heartbeat LED
-        // official nordic academy example uses INVERTED for 'normal' polarity
-        // https://github.com/NordicDeveloperAcademy/ncs-inter
-        label = "PWM_BATTERY_LED";
+    pwmch1: pwm_1 {
+        pwms = < &pwm0 0 PWM_MSEC(1) PWM_POLARITY_NORMAL>;  // 0 - channel
+        label = "PWM_CH1";
     };
+
     };
 };
 
