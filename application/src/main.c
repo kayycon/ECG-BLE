@@ -50,6 +50,29 @@ LOG_MODULE_REGISTER(main, LOG_LEVEL_DBG);
     ADC_CHANNEL_CFG_FROM_DT_NODE(DT_ALIAS(adc_alias))          \
 }
 
+int16_t buf1, buf2;
+
+struct adc_sequence sequence0 = {
+    .buffer = &buf1,
+    .buffer_size = sizeof(buf1), // bytes
+};
+
+struct adc_sequence_options options = {
+        .interval_us = 100,
+        .extra_samplings = 0,  // -1 b/c first sample is already in the buffer
+        .callback = NULL,  // called after all extra samples are collected
+};
+
+struct adc_sequence sequence2 = {
+        .options = &options,  // add the options to the sequence
+        .buffer = &buf2,  // buf is now a pointer to the first index of an array
+        .buffer_size = sizeof(buf2),  // need to specify the size of the buffer array in bytes
+        /*  If the buffer is not global or local in scope, the buffer (array) name will just be a pointer to the first element of the array!  The buffer_size will need to be calculated as the product of the size (in bytes) of this first index and the length of the array (number of indices in the array)
+
+        .buffer_size = BUFFER_ARRAY_LEN * sizeof(buf),  // non-global/local array scope
+        */
+};
+
 // Event definitions
 K_EVENT_DEFINE(button_events);
 #define GET_BTN_PRESS BIT(0)
@@ -220,28 +243,8 @@ struct led error_led_status = {
     .toggled = false,
     .saved_state = false
 };
-int16_t buf1, buf2;
 
-//int16_t buf1[ECG_BUFFER_SIZE]; // Buffer for the first sequence
-//int16_t buf2[ECG_BUFFER_SIZE]; // Buffer for the second sequence
 
-struct adc_sequence_options options = {
-        .interval_us = 100,
-        .extra_samplings = 0,  // -1 b/c first sample is already in the buffer
-        .callback = NULL,  // called after all extra samples are collected
-};
-
-struct adc_sequence sequence0 = {
-    //.options = &options,  // add the options to the sequence
-    .buffer = &buf1,
-    .buffer_size = sizeof(buf1), // bytes
-    .oversampling = 0,   // No oversampling
-};
-
-struct adc_sequence sequence1 = {
-    .buffer = &buf2,
-    .buffer_size = sizeof(buf2), // bytes >> change this as it will be an array
-};
 
 // Init state
 static void init_entry(void *o)
@@ -871,15 +874,15 @@ int measure_battery_voltage(const struct adc_dt_spec *adc, int32_t *voltage_mv) 
     }
 
     // Convert raw ADC value to millivolts
-    int32_t mv = buf1;
-    ret = adc_raw_to_millivolts_dt(&vadc_batt, &mv);
+    voltage_mv = buf1;
+    ret = adc_raw_to_millivolts_dt(&vadc_batt, &voltage_mv);
     if (ret < 0) {
         LOG_ERR("Buffer cannot be converted to mV; returning raw buffer value.");
     } else {
-    LOG_INF("Battery voltage: %d", mv);
+    LOG_INF("Battery voltage: %d", voltage_mv);
 }
 
-    return 0;
+    //return 0;
 }
 
 
@@ -912,7 +915,7 @@ void ecg_sampling_work_handler(struct k_work *work) {
     // Clear the sample buffer
     buf2 = 0;
 
-    int ret = adc_read(vadc_hrate.dev, &sequence1);
+    int ret = adc_read(vadc_hrate.dev, &sequence2);
     if (ret == 0) {
         if (ecg_index < ECG_BUFFER_SIZE - 1) {
             ecg_buffer[ecg_index] = buf2;
