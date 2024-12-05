@@ -40,7 +40,6 @@ pwm {
     #address-cells = <1>;
     #size-cells = <0>;
 
-
     vadcbatt: channel@0 {
         reg = <0>; // Channel number 0
         zephyr,reference = "ADC_REF_INTERNAL"; // Internal reference (0.6)

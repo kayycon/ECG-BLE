@@ -34,13 +34,19 @@ LOG_MODULE_REGISTER(main, LOG_LEVEL_DBG);
 
 // ECG configurations
 #define BLINK_TIMER_INTERVAL_MS 500
-#define ECG_SAMPLE_RATE 100 // Sampling rate in Hz
-#define ECG_BUFFER_SIZE (ECG_SAMPLE_RATE * 30) // 30 seconds of data (need to change)
+#define ECG_SAMPLE_RATE 10 // Sampling rate in Hz
+#define ECG_BUFFER_SIZE (ECG_SAMPLE_RATE * 30) // 30 seconds of data
+#define TIMER_INTERVAL_MS (1000 / ECG_SAMPLE_RATE) // 100 ms for 10 Hz
+
 #define R_PEAK_THRESHOLD 2000 // Threshold for R peak detection
-#define ECG_THREAD_STACK_SIZE 2048
+#define ECG_THREAD_STACK_SIZE 8192
 #define ECG_THREAD_PRIORITY 2  // Adjust priority as needed
-#define ECG_WORKQUEUE_STACK_SIZE 1024
+#define ECG_WORKQUEUE_STACK_SIZE 4096
 #define ECG_WORKQUEUE_PRIORITY 3
+
+// Define a separate event group for ECG events
+K_EVENT_DEFINE(ecg_events);
+#define ECG_SAMPLING_COMPLETE BIT(0) // Define a new bit for ECG completion
 
 // ADC Struct Macro
 #define ADC_DT_SPEC_GET_BY_ALIAS(adc_alias)                    \
@@ -60,6 +66,7 @@ struct adc_sequence sequence0 = {
 struct adc_sequence_options options = {
         //.interval_us = 100,
         .extra_samplings = ECG_BUFFER_SIZE - 1,  // -1 b/c first sample is already in the buffer
+        //.extra_samplings = 0,  // Read one sample per adc_read
         .callback = NULL,  // called after all extra samples are collected
 };
 
@@ -125,7 +132,7 @@ static const struct pwm_dt_spec pwm1 = PWM_DT_SPEC_GET(DT_ALIAS(pwm1));
 int32_t temperature_degC;
 int32_t error_code = 0;  // Global variable to store error codes
 int32_t battery_voltage = 0; // Global variable to store the battery voltage
-volatile uint16_t ecg_index = 0;
+atomic_t ecg_index = ATOMIC_INIT(0);
 float blink_frequency, on_time_seconds, pwm_duty, pwm_duty_max;
 int16_t ecg_buffer[ECG_BUFFER_SIZE]; // Global buffer to store ECG data
 int32_t average_hr = 0; // Global variable to store the average heart rate
@@ -481,12 +488,12 @@ static void idle_exit(void *o) {
 static void measure_entry(void *o) {
     LOG_INF("Measure Entry State");
 
-    // Reset ECG buffer index
-    ecg_index = 0;
+    // Reset ECG buffer index atomically
+    atomic_set(&ecg_index, 0);
 
     // Start ECG sampling timer (sampling every 10 ms for 30 seconds)
-    k_timer_start(&ecg_sampling_timer, K_NO_WAIT, K_MSEC(10)); // 100 Hz sampling rate
-
+    //k_timer_start(&ecg_sampling_timer, K_NO_WAIT, K_MSEC(10)); // 100 Hz sampling rate
+    k_timer_start(&ecg_sampling_timer, K_NO_WAIT, K_MSEC(TIMER_INTERVAL_MS));
 
     // Optionally, set a timer to stop sampling after 30 seconds
     //k_timer_start(&ecg_sampling_stop_timer, K_SECONDS(30), K_NO_WAIT);
@@ -501,71 +508,72 @@ static void measure_run(void *o) {
     LOG_INF("Measure Run State");
 
     // Check for error event
-    //if (s_obj.events & ERROR_EVENT) {
     if (atomic_test_and_clear_bit(&error_events, 0)) {
         LOG_ERR("Error detected during measurement. Transitioning to ERROR state.");
-       //s_obj.events &= ~ERROR_EVENT; // Clear the error event flag
         smf_set_state(SMF_CTX(&s_obj), &states[Error]);
         return;
     }
 
-    // Step 1: Read Temperature
-    int ret = read_temperature_sensor(temp_sensor, &temperature_degC);
-    if (ret != 0) {
-        LOG_ERR("Failed to read temperature sensor");
-        error_code |= ERROR_SENSOR_READ;
-        //smf_set_state(SMF_CTX(&s_obj), &states[Error]);
-        return;
-    }
-    LOG_INF("Temperature: %d °C", temperature_degC);
+    // Check if ECG_SAMPLING_COMPLETE event is set
+    if (k_event_wait(&ecg_events, ECG_SAMPLING_COMPLETE, false, K_NO_WAIT) & ECG_SAMPLING_COMPLETE) {
+        LOG_INF("ECG Sampling Complete Event Received.");
 
-    // Step 2: Ensure ECG Sampling is Complete
-    if (ecg_index < ECG_BUFFER_SIZE) {
-        LOG_INF("ECG sampling not yet complete. Waiting...");
-        return;  // Wait for ECG sampling to complete
+        // Step 1: Read Temperature
+        int ret = read_temperature_sensor(temp_sensor, &temperature_degC);
+        if (ret != 0) {
+            LOG_ERR("Failed to read temperature sensor");
+            error_code |= ERROR_SENSOR_READ;
+            smf_set_state(SMF_CTX(&s_obj), &states[Error]);
+            return;
+        }
+        LOG_INF("Temperature: %d °C", temperature_degC);
+
+        // Step 2: Calculate Average Heart Rate
+        size_t collected_samples = atomic_get(&ecg_index); // Get the current index as the number of samples collected
+        ret = calculate_average_heart_rate(&vadc_hrate, collected_samples);
+        if (ret != 0) {
+            LOG_ERR("Failed to calculate heart rate");
+            error_code |= ERROR_ADC_INIT;
+            atomic_set_bit(&error_events, 0);
+            smf_set_state(SMF_CTX(&s_obj), &states[Error]);
+            return;
+        }
+        LOG_INF("Average Heart Rate calculated successfully: %d BPM", average_hr);
+
+        // Step 3: Set Timer for Heart Rate LED Blink
+        if (average_hr > 0) {
+            uint32_t period_ms = 60000 / average_hr;      // Timer period in milliseconds
+            uint32_t on_time_ms = period_ms / 4;         // 25% duty cycle
+
+            k_timer_start(&hrate_blink_timer, K_MSEC(on_time_ms), K_MSEC(period_ms));
+            LOG_INF("Heart Rate LED blink started with %d ms ON time and %d ms period", on_time_ms, period_ms);
+        }
+
+        // Step 4: Send BLE Notifications
+        // Send Temperature Notification
+        ret = send_BT_notification(current_conn, (uint8_t *)&temperature_degC, sizeof(temperature_degC));
+        if (ret) {
+            LOG_ERR("Failed to send temperature notification");
+        }
+
+        if (current_conn) {
+            ret = send_BT_notification(current_conn, (uint8_t *)&average_hr, sizeof(average_hr));
+            if (ret) {
+                LOG_ERR("Failed to send heart rate notification (ret = %d)", ret);
+            } else {
+                LOG_INF("Heart rate notification sent: %d BPM", average_hr);
+            }
+        } else {
+            LOG_ERR("No active BLE connection. Heart rate notification skipped.");
+        }
+
+        // Transition back to IDLE
+        smf_set_state(SMF_CTX(&s_obj), &states[Idle]);
     }
 
-    // Step 3: Calculate Average Heart Rate
-    ret = calculate_average_heart_rate(&vadc_hrate, ecg_index);
-    if (ret != 0) {
-        LOG_ERR("Failed to calculate heart rate");
-        error_code |= ERROR_ADC_INIT;
-        atomic_set_bit(&error_events, 0);
-        smf_set_state(SMF_CTX(&s_obj), &states[Error]);
-        return;
-    }
-    LOG_INF("Average Heart Rate calculated successfully: %d BPM", average_hr);
-
-    // Step 4: Set Timer for Heart Rate LED Blink
-    if (average_hr > 0) {
-        uint32_t period_ms = 60000 / average_hr;      // Timer period in milliseconds
-        uint32_t on_time_ms = period_ms / 4;         // 25% duty cycle
-
-        k_timer_start(&hrate_blink_timer, K_MSEC(on_time_ms), K_MSEC(period_ms));
-        LOG_INF("Heart Rate LED blink started with %d ms ON time and %d ms period", on_time_ms, period_ms);
-    }
-
-    // Step 5: Send BLE Notifications
-    // Send Temperature Notification
-    ret = send_BT_notification(current_conn, (uint8_t *)&temperature_degC, sizeof(temperature_degC));
-    if (ret) {
-        LOG_ERR("Failed to send temperature notification");
-    }
-
-    if (current_conn) {
-    int ret = send_BT_notification(current_conn, (uint8_t *)&average_hr, sizeof(average_hr));
-    if (ret) {
-        LOG_ERR("Failed to send heart rate notification (ret = %d)", ret);
-    } else {
-        LOG_INF("Heart rate notification sent: %d BPM", average_hr);
-    }
-    } else {
-    LOG_ERR("No active BLE connection. Heart rate notification skipped.");
-    }
-
-    // Transition back to IDLE
-    smf_set_state(SMF_CTX(&s_obj), &states[Idle]);
+    // Else, do nothing and wait for the event
 }
+
 
 static void measure_exit(void *o) {
     LOG_INF("Exiting Measure State");
@@ -641,6 +649,13 @@ int main(void) {
 
         // Check for button events without blocking
         s_obj.events |= k_event_wait(&button_events, ANY_BTN_PRESS, false, K_NO_WAIT);
+
+        /* // Handle ECG_SAMPLING_COMPLETE event
+        if (s_obj.events & ECG_SAMPLING_COMPLETE) {
+            LOG_INF("ECG Sampling Complete Event Received.");
+            smf_set_state(SMF_CTX(&s_obj), &states[Measure]); // Proceed with Measure state
+            s_obj.events &= ~ECG_SAMPLING_COMPLETE; // Clear the event flag
+        } */
 
         // Sleep briefly to allow other threads to execute
         k_msleep(10);
@@ -907,17 +922,17 @@ void ecg_sampling_work_handler(struct k_work *work) {
         return;
     }
 
-    // Detailed logging for ADC reading
-    LOG_DBG("ADC read success. buf2[0]: %d", buf2[0]);
-
-    if (ecg_index < ECG_BUFFER_SIZE) {
-        ecg_buffer[ecg_index++] = buf2[0];
-        LOG_DBG("Sample added to buffer. New index: %d", ecg_index);
+    // Process all samples read
+    size_t samples_read = sequence2.buffer_size / sizeof(buf2[0]);
+    for (size_t i = 0; i < samples_read && ecg_index < ECG_BUFFER_SIZE; i++) {
+        ecg_buffer[ecg_index++] = buf2[i];
+        LOG_DBG("Sample %zu added to buffer. New index: %d", i, ecg_index);
     }
 
-    if (ecg_index >= ECG_BUFFER_SIZE) {
+    if (atomic_get(&ecg_index) >= ECG_BUFFER_SIZE) {
         k_timer_stop(&ecg_sampling_timer);
-        LOG_INF("ECG sampling complete. Total samples: %d", ecg_index);
+        LOG_INF("ECG sampling complete. Total samples: %d", atomic_get(&ecg_index));
+        k_event_post(&ecg_events, ECG_SAMPLING_COMPLETE); // Post to ECG events
     }
 }
 
@@ -947,14 +962,14 @@ void apply_moving_average_filter(const int16_t *input, int16_t *output, size_t l
 int calculate_average_heart_rate(const struct adc_dt_spec *adc, size_t sample_count) {
 
     // Ensure ECG sampling is complete
-    if (sample_count < ECG_SAMPLE_RATE * 30) { // Less than 30 seconds of data
+    if (sample_count < 50) { // Less than 30 seconds of data
         LOG_ERR("Insufficient ECG data for heart rate calculation");
         return -1;
     }
 
     // Apply moving average filter
     int16_t filtered_ecg[ECG_BUFFER_SIZE];
-    apply_moving_average_filter(ecg_buffer, filtered_ecg, ECG_BUFFER_SIZE, 5);
+    apply_moving_average_filter(ecg_buffer, filtered_ecg, sample_count, 5);
 
     size_t r_peak_count = 0;
     //int16_t threshold = 200; // threshold for R-peak detection
