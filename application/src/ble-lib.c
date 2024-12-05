@@ -219,6 +219,8 @@ int send_BT_notification(struct bt_conn *conn, uint8_t *value, uint16_t length) 
     int ret = bt_gatt_notify_cb(conn, &params);
     if (ret) {
         LOG_ERR("Failed to send notification: %d", ret);
+    } else {
+        LOG_INF("Notification sent successfully");
     }
     return ret;
 }

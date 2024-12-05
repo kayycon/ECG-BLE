@@ -161,7 +161,7 @@ void battery_measure_callback(struct k_timer *battery_measure_timer);
 void ecg_sampling_callback(struct k_timer *ecg_sampling_timer);
 void hrate_blink_handler(struct k_timer *hrate_blink_timer);
 void error_blink_handler(struct k_timer *error_blink_timer);
-void ecg_sampling_stop_callback(struct k_timer *ecg_sampling_stop_timer); // Function prototype
+//void ecg_sampling_stop_callback(struct k_timer *ecg_sampling_stop_timer); // Function prototype
 
 void battery_measure_work_handler(struct k_work *work);
 //void apply_moving_average_filter(const int16_t *input, int16_t *output, size_t length, size_t window_size);
@@ -169,6 +169,8 @@ void battery_measure_work_handler(struct k_work *work);
 // Forward declaration of the work handler function
 void ecg_sampling_work_handler(struct k_work *work);
 //void ecg_sampling_thread(void *arg1, void *arg2, void *arg3);
+
+void setup_ble(int *ret);
 
 // initialize GPIO Callback Structs
 static struct gpio_callback measure_button_cb; // need one per CB
@@ -196,7 +198,7 @@ K_TIMER_DEFINE(battery_measure_timer, battery_measure_callback, NULL);
 K_TIMER_DEFINE(ecg_sampling_timer, ecg_sampling_callback, NULL); 
 K_TIMER_DEFINE(hrate_blink_timer, hrate_blink_handler, NULL);
 K_TIMER_DEFINE(error_blink_timer, error_blink_handler, NULL);
-K_TIMER_DEFINE(ecg_sampling_stop_timer, ecg_sampling_stop_callback, NULL);
+//K_TIMER_DEFINE(ecg_sampling_stop_timer, ecg_sampling_stop_callback, NULL);
 K_WORK_DEFINE(battery_measure_work, battery_measure_work_handler);
 // Declare the work item
 K_WORK_DEFINE(ecg_sampling_work, ecg_sampling_work_handler);
@@ -244,16 +246,23 @@ struct led error_led_status = {
     .toggled = false,
     .saved_state = false
 };
+/* 
+struct bt_conn_cb bluetooth_callbacks = {
+    .connected = on_connected,
+    .disconnected = on_disconnected,
+};
+
+struct bt_remote_srv_cb remote_service_callbacks = {
+    .notif_changed = on_notif_changed,
+    .data_rx = on_data_rx,
+}; */
 
 // Init state
 static void init_entry(void *o)
 {
     LOG_INF("Init Entry State");
 
-    //error_code = 0; // Reset any previous error codes
-
-     // Initialize Bluetooth
-     /*
+    // Initialize Bluetooth
     int ret = bluetooth_init(&bluetooth_callbacks, &remote_service_callbacks);
     if (ret) {
         LOG_ERR("Bluetooth initialization failed (ret = %d)", ret);
@@ -261,7 +270,7 @@ static void init_entry(void *o)
         return;
     }
     LOG_INF("Bluetooth initialized");
-*/
+
     // Start the heartbeat timer (1-second period, 50% duty cycle)
 
     //k_timer_start(&heartbeat_timer, K_NO_WAIT, K_SECONDS(1));
@@ -480,7 +489,7 @@ static void measure_entry(void *o) {
 
 
     // Optionally, set a timer to stop sampling after 30 seconds
-    k_timer_start(&ecg_sampling_stop_timer, K_SECONDS(30), K_NO_WAIT);
+    //k_timer_start(&ecg_sampling_stop_timer, K_SECONDS(30), K_NO_WAIT);
     
     LOG_INF("Measurement process started.");
 
@@ -536,7 +545,6 @@ static void measure_run(void *o) {
         LOG_INF("Heart Rate LED blink started with %d ms ON time and %d ms period", on_time_ms, period_ms);
     }
 
-/*
     // Step 5: Send BLE Notifications
     // Send Temperature Notification
     ret = send_BT_notification(current_conn, (uint8_t *)&temperature_degC, sizeof(temperature_degC));
@@ -554,7 +562,6 @@ static void measure_run(void *o) {
     } else {
     LOG_ERR("No active BLE connection. Heart rate notification skipped.");
     }
-    */
 
     // Transition back to IDLE
     smf_set_state(SMF_CTX(&s_obj), &states[Idle]);
@@ -881,7 +888,7 @@ void adjust_led_brightness(const struct pwm_dt_spec *pwm1, int32_t voltage_mv) {
 }
 
 void ecg_sampling_work_handler(struct k_work *work) {
-    //LOG_DBG("ecg_sampling_work_handler called");
+    LOG_DBG("ECG sampling work handler called. Current index: %d", ecg_index);
 
     // Clear the sample buffer
     //buf2 = 0;
@@ -900,18 +907,21 @@ void ecg_sampling_work_handler(struct k_work *work) {
         return;
     }
 
-    if (ret == 0) {
-        if (ecg_index < ECG_BUFFER_SIZE) {
-            ecg_buffer[ecg_index++] = buf2;
-            LOG_DBG("ADC read success, ecg_sample=%d, ecg_index=%d", buf2, ecg_index);
-    } else {
-        k_timer_stop(&ecg_sampling_timer);
-        LOG_INF("Finished ECG sampling");
+    // Detailed logging for ADC reading
+    LOG_DBG("ADC read success. buf2[0]: %d", buf2[0]);
+
+    if (ecg_index < ECG_BUFFER_SIZE) {
+        ecg_buffer[ecg_index++] = buf2[0];
+        LOG_DBG("Sample added to buffer. New index: %d", ecg_index);
     }
+
+    if (ecg_index >= ECG_BUFFER_SIZE) {
+        k_timer_stop(&ecg_sampling_timer);
+        LOG_INF("ECG sampling complete. Total samples: %d", ecg_index);
     }
 }
 
-void ecg_sampling_callback(struct k_timer *timer_id) {
+void ecg_sampling_callback(struct k_timer *ecg_sampling_timer) {
     // Only submit work if buffer is not full
     if (ecg_index < ECG_BUFFER_SIZE) {
         k_work_submit_to_queue(&ecg_workqueue, &ecg_sampling_work);
@@ -970,11 +980,11 @@ int calculate_average_heart_rate(const struct adc_dt_spec *adc, size_t sample_co
     return 0; // Success
 }
 
-void ecg_sampling_stop_callback(struct k_timer *ecg_sampling_stop_) {
+/* void ecg_sampling_stop_callback(struct k_timer *ecg_sampling_stop_) {
     k_timer_stop(&ecg_sampling_timer); // Stop the sampling timer
     LOG_INF("ECG sampling stopped after 30 seconds.");
     // You may want to handle any additional cleanup or state transitions here
-}
+} */
 
 void measure_button_callback(const struct device *dev, struct gpio_callback *cb, uint32_t pins) {
     uint32_t current_time = k_uptime_get_32(); // Get current time in milliseconds
