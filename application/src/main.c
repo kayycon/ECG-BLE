@@ -880,24 +880,33 @@ void adjust_led_brightness(const struct pwm_dt_spec *pwm1, int32_t voltage_mv) {
 }
 
 void ecg_sampling_work_handler(struct k_work *work) {
-    LOG_DBG("ecg_sampling_work_handler called");
+    //LOG_DBG("ecg_sampling_work_handler called");
 
     // Clear the sample buffer
-    buf2 = 0;
+    //buf2 = 0;
+
+    // Add a delay before adc_read
+    k_sleep(K_MSEC(1));
+
+    (void)adc_sequence_init_dt(&vadc_hrate, &sequence2);
 
     int ret = adc_read(vadc_hrate.dev, &sequence2);
-    if (ret == 0) {
-        if (ecg_index < ECG_BUFFER_SIZE - 1) {
-            ecg_buffer[ecg_index] = buf2;
-            ecg_index++;
-            LOG_DBG("ADC read success, ecg_sample=%d, ecg_index=%d", buf2, ecg_index);
-        }
+    if (ret < 0) {
+        LOG_ERR("Could not initialize ADC sequence: %d", ret);
+        k_timer_stop(&ecg_sampling_timer);
+        error_code |= ERROR_ADC_INIT;
+        atomic_set_bit(&error_events, 0);
+        return;
+    }
 
-        // Check if buffer is full
-        if (ecg_index == ECG_BUFFER_SIZE) {
-            k_timer_stop(&ecg_sampling_timer);
-            LOG_INF("Finished ECG sampling");
-        }
+    if (ret == 0) {
+        if (ecg_index < ECG_BUFFER_SIZE) {
+            ecg_buffer[ecg_index++] = buf2;
+            LOG_DBG("ADC read success, ecg_sample=%d, ecg_index=%d", buf2, ecg_index);
+    } else {
+        k_timer_stop(&ecg_sampling_timer);
+        LOG_INF("Finished ECG sampling");
+    }
     } else {
         LOG_ERR("Failed to sample ECG, adc_read returned: %d", ret);
         k_timer_stop(&ecg_sampling_timer);
@@ -905,7 +914,6 @@ void ecg_sampling_work_handler(struct k_work *work) {
         atomic_set_bit(&error_events, 0);
     }
 }
-
 
 void ecg_sampling_callback(struct k_timer *timer_id) {
     // Only submit work if buffer is not full
