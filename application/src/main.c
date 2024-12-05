@@ -828,6 +828,7 @@ int measure_battery_voltage(const struct adc_dt_spec *adc, int32_t *voltage_mv) 
     k_sleep(K_MSEC(10));
 
     (void)adc_sequence_init_dt(&vadc_batt, &sequence0);
+
     int ret = adc_read(vadc_batt.dev, &sequence0);
     if (ret < 0) {
         LOG_ERR("Could not read ADC: %d", ret);
@@ -836,15 +837,20 @@ int measure_battery_voltage(const struct adc_dt_spec *adc, int32_t *voltage_mv) 
     }
 
     // Convert raw ADC value to millivolts
-    voltage_mv = buf1;
-    ret = adc_raw_to_millivolts_dt(&vadc_batt, &voltage_mv);
+    int32_t raw_adc = buf1;
+    ret = adc_raw_to_millivolts_dt(&vadc_batt, &raw_adc);
     if (ret < 0) {
         LOG_ERR("Buffer cannot be converted to mV; returning raw buffer value.");
+        *voltage_mv = buf1;
     } else {
-    LOG_INF("Battery voltage: %d", voltage_mv);
+    LOG_INF("Battery voltage: %d", raw_adc);
+    *voltage_mv = raw_adc;
 }
 
     return 0;
+
+    // How do i pass this voltage_mv to the adjust_led_brightness function?
+
 }
 
 void adjust_led_brightness(const struct pwm_dt_spec *pwm1, int32_t voltage_mv) {
@@ -852,7 +858,7 @@ void adjust_led_brightness(const struct pwm_dt_spec *pwm1, int32_t voltage_mv) {
     float voltage_v = voltage_mv / 1000.0f; // Convert mV to V
 
     // Calculate the duty cycle as a percentage of the maximum battery voltage
-    int32_t duty_cycle_percentage = (voltage_mv / 3.7f) * 100; // Scale 0–100%
+    int32_t duty_cycle_percentage = (voltage_v / 3.7f) * 100; // Scale 0–100%
 
     // Ensure the duty cycle percentage is within bounds
     if (duty_cycle_percentage > 100) {
