@@ -50,7 +50,7 @@ LOG_MODULE_REGISTER(main, LOG_LEVEL_DBG);
     ADC_CHANNEL_CFG_FROM_DT_NODE(DT_ALIAS(adc_alias))          \
 }
 
-int16_t buf1, buf2;
+int16_t buf1, buf2[ECG_BUFFER_SIZE];
 
 struct adc_sequence sequence0 = {
     .buffer = &buf1,
@@ -58,8 +58,8 @@ struct adc_sequence sequence0 = {
 };
 
 struct adc_sequence_options options = {
-        .interval_us = 100,
-        .extra_samplings = 0,  // -1 b/c first sample is already in the buffer
+        //.interval_us = 100,
+        .extra_samplings = ECG_BUFFER_SIZE - 1,  // -1 b/c first sample is already in the buffer
         .callback = NULL,  // called after all extra samples are collected
 };
 
@@ -161,6 +161,7 @@ void battery_measure_callback(struct k_timer *battery_measure_timer);
 void ecg_sampling_callback(struct k_timer *ecg_sampling_timer);
 void hrate_blink_handler(struct k_timer *hrate_blink_timer);
 void error_blink_handler(struct k_timer *error_blink_timer);
+void ecg_sampling_stop_callback(struct k_timer *ecg_sampling_stop_timer); // Function prototype
 
 void battery_measure_work_handler(struct k_work *work);
 //void apply_moving_average_filter(const int16_t *input, int16_t *output, size_t length, size_t window_size);
@@ -195,7 +196,7 @@ K_TIMER_DEFINE(battery_measure_timer, battery_measure_callback, NULL);
 K_TIMER_DEFINE(ecg_sampling_timer, ecg_sampling_callback, NULL); 
 K_TIMER_DEFINE(hrate_blink_timer, hrate_blink_handler, NULL);
 K_TIMER_DEFINE(error_blink_timer, error_blink_handler, NULL);
-K_TIMER_DEFINE(ecg_sampling_stop_timer, NULL, NULL);
+K_TIMER_DEFINE(ecg_sampling_stop_timer, ecg_sampling_stop_callback, NULL);
 K_WORK_DEFINE(battery_measure_work, battery_measure_work_handler);
 // Declare the work item
 K_WORK_DEFINE(ecg_sampling_work, ecg_sampling_work_handler);
@@ -243,8 +244,6 @@ struct led error_led_status = {
     .toggled = false,
     .saved_state = false
 };
-
-
 
 // Init state
 static void init_entry(void *o)
@@ -482,6 +481,7 @@ static void measure_entry(void *o) {
 
     // Optionally, set a timer to stop sampling after 30 seconds
     k_timer_start(&ecg_sampling_stop_timer, K_SECONDS(30), K_NO_WAIT);
+    
     LOG_INF("Measurement process started.");
 
     // Start ECG sampling timer (30 seconds)
@@ -562,9 +562,10 @@ static void measure_run(void *o) {
 
 static void measure_exit(void *o) {
     LOG_INF("Exiting Measure State");
+
+    k_timer_stop(&ecg_sampling_timer);  // Stop the ECG Sampling Timer
     k_timer_stop(&hrate_blink_timer);  // Stop the Heart Rate LED Blink Timer
 
-    k_timer_stop(&hrate_blink_timer);  // Stop blinking LED2
 }
 
 static void error_entry(void *o) {
@@ -886,7 +887,7 @@ void ecg_sampling_work_handler(struct k_work *work) {
     //buf2 = 0;
 
     // Add a delay before adc_read
-    k_sleep(K_MSEC(1));
+    //k_sleep(K_MSEC(10));
 
     (void)adc_sequence_init_dt(&vadc_hrate, &sequence2);
 
@@ -907,58 +908,72 @@ void ecg_sampling_work_handler(struct k_work *work) {
         k_timer_stop(&ecg_sampling_timer);
         LOG_INF("Finished ECG sampling");
     }
-    } else {
-        LOG_ERR("Failed to sample ECG, adc_read returned: %d", ret);
-        k_timer_stop(&ecg_sampling_timer);
-        error_code |= ERROR_ADC_INIT;
-        atomic_set_bit(&error_events, 0);
     }
 }
 
 void ecg_sampling_callback(struct k_timer *timer_id) {
     // Only submit work if buffer is not full
     if (ecg_index < ECG_BUFFER_SIZE) {
-        k_work_submit(&ecg_sampling_work);
+        k_work_submit_to_queue(&ecg_workqueue, &ecg_sampling_work);
     } else {
         k_timer_stop(&ecg_sampling_timer);
         LOG_INF("Finished ECG sampling");
     }
 }
 
+void apply_moving_average_filter(const int16_t *input, int16_t *output, size_t length, size_t window_size) {
+    for (size_t i = 0; i < length; i++) {
+        int32_t sum = 0;
+        size_t count = 0;
+        for (size_t j = (i >= window_size/2) ? i - window_size/2 : 0;
+             j <= i + window_size/2 && j < length; j++) {
+            sum += input[j];
+            count++;
+        }
+        output[i] = sum / count;
+    }
+}
 
 int calculate_average_heart_rate(const struct adc_dt_spec *adc, size_t sample_count) {
 
     // Ensure ECG sampling is complete
-    if (sample_count < ECG_SAMPLE_RATE * 30) { // Less than 10 seconds of data
+    if (sample_count < ECG_SAMPLE_RATE * 30) { // Less than 30 seconds of data
         LOG_ERR("Insufficient ECG data for heart rate calculation");
         return -1;
     }
 
     // Apply moving average filter
-    //int16_t filtered_ecg[ECG_BUFFER_SIZE];
-    //apply_moving_average_filter(ecg_buffer, filtered_ecg, ECG_BUFFER_SIZE, 5);
+    int16_t filtered_ecg[ECG_BUFFER_SIZE];
+    apply_moving_average_filter(ecg_buffer, filtered_ecg, ECG_BUFFER_SIZE, 5);
 
     size_t r_peak_count = 0;
     //int16_t threshold = 200; // threshold for R-peak detection
 
-    //  R-peak detection
-    for (size_t i = 1; i < ecg_index - 1; i++) {
-    if (ecg_buffer[i] > hr_config.r_peak_threshold &&
-        ecg_buffer[i] > ecg_buffer[i - 1] &&
-        ecg_buffer[i] > ecg_buffer[i + 1]) {
-        r_peak_count++;
-        LOG_DBG("R-peak detected at index %d: %d", i, ecg_buffer[i]);
+    // R-peak detection
+    for (size_t i = 1; i < sample_count - 1; i++) {
+        if (filtered_ecg[i] > hr_config.r_peak_threshold &&
+            filtered_ecg[i] > filtered_ecg[i - 1] &&
+            filtered_ecg[i] > filtered_ecg[i + 1]) {
+            r_peak_count++;
+            LOG_DBG("R-peak detected at index %d: %d", i, filtered_ecg[i]);
         }
     }
 
     // Calculate average BPM
-    int bpm = (r_peak_count * 60) / 30; // BPM = Peaks per minute
+    int total_time_sec = sample_count / ECG_SAMPLE_RATE;
+    int bpm = (r_peak_count * 60) / total_time_sec;
     LOG_INF("Calculated BPM: %d", bpm);
 
     // Assign to global variable
     average_hr = bpm;
 
     return 0; // Success
+}
+
+void ecg_sampling_stop_callback(struct k_timer *ecg_sampling_stop_) {
+    k_timer_stop(&ecg_sampling_timer); // Stop the sampling timer
+    LOG_INF("ECG sampling stopped after 30 seconds.");
+    // You may want to handle any additional cleanup or state transitions here
 }
 
 void measure_button_callback(const struct device *dev, struct gpio_callback *cb, uint32_t pins) {
@@ -985,7 +1000,7 @@ void measure_button_callback(const struct device *dev, struct gpio_callback *cb,
     last_press_time = current_time;
 }
 
-void hrate_blink_handler(struct k_timer *timer_id) {
+void hrate_blink_handler(struct k_timer *hrate_blink_timer) {
     static bool led_on = false;
     const struct gpio_dt_spec *led = &hrate_led;
 
