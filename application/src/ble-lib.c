@@ -224,3 +224,56 @@ int send_BT_notification(struct bt_conn *conn, uint8_t *value, uint16_t length) 
     }
     return ret;
 }
+
+void check_and_send_temperature_notification(void) {
+    if (current_conn && notifications_enabled == BT_DATA_NOTIFICATIONS_ENABLED) {
+        int ret = send_BT_notification(current_conn, (uint8_t *)&temperature_degC, sizeof(temperature_degC));
+        if (ret) {
+            LOG_ERR("Failed to send temperature notification: %d", ret);
+        } else {
+            LOG_INF("Temperature notification sent.");
+        }
+    } else {
+        LOG_WRN("No active connection or notifications not enabled, skipping notification.");
+    }
+}
+
+/* Declare ecg_attrs and ecg_data */
+static struct bt_gatt_attr ecg_attrs[] = {
+    /* Add your ECG attributes here */
+};
+
+static uint8_t ecg_data[20]; // Adjust the size as needed
+
+void send_ecg_notification(void) {
+    if (current_conn && notifications_enabled == BT_DATA_NOTIFICATIONS_ENABLED) {
+        struct bt_gatt_notify_params params = {0}; // Initialize the params structure
+
+        params.attr = &ecg_attrs[0]; // Update index based on your ECG characteristic
+        params.data = ecg_data; // Use the ECG data buffer
+        params.len = sizeof(ecg_data); // Set the length of the data to send
+
+        int ret = bt_gatt_notify_cb(current_conn, &params);
+        if (ret < 0) {
+            LOG_ERR("Failed to send ECG notification: %d", ret);
+        } else {
+            LOG_INF("ECG notification sent.");
+        }
+    } else {
+        LOG_WRN("No active connection or notifications not enabled, ECG notification skipped.");
+    }
+}
+
+void send_error_notification(void) {
+    if (current_conn) {
+        int ret = bt_gatt_notify(current_conn, &remote_err_uuid, &errors.events, sizeof(errors.events));
+        if (ret < 0) {
+            LOG_ERR("Failed to send error notification: %d", ret);
+        } else {
+            LOG_INF("Error notification sent.");
+        }
+    } else {
+        LOG_WRN("No active connection, error notification skipped.");
+    }
+}
+
