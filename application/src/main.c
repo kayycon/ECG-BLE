@@ -296,8 +296,8 @@ static void init_entry(void *o)
 
     // Start the heartbeat timer (1-second period, 50% duty cycle)
 
-    //k_timer_start(&heartbeat_timer, K_NO_WAIT, K_SECONDS(1));
-    k_timer_start(&heartbeat_timer, K_MSEC(BLINK_TIMER_INTERVAL_MS), K_MSEC(BLINK_TIMER_INTERVAL_MS));
+    k_timer_start(&heartbeat_timer, K_NO_WAIT, K_SECONDS(1));
+    //k_timer_start(&heartbeat_timer, K_MSEC(BLINK_TIMER_INTERVAL_MS), K_MSEC(BLINK_TIMER_INTERVAL_MS));
     LOG_INF("Heartbeat timer started.");
     
     // Measure battery voltage at startup
@@ -504,12 +504,9 @@ static void idle_exit(void *o) {
 static void measure_entry(void *o) {
     LOG_INF("Measure Entry State");
 
-    // Reset ECG buffer index atomically
-    //atomic_set(&ecg_index, 0);
-
     // Start ECG sampling timer (sampling every 10 ms for 30 seconds)
     //k_timer_start(&ecg_sampling_timer, K_NO_WAIT, K_MSEC(10)); // 100 Hz sampling rate
-    k_timer_start(&ecg_sampling_timer, K_NO_WAIT, K_MSEC(TIMER_INTERVAL_MS));
+    k_timer_start(&ecg_sampling_timer, K_MSEC(100), K_MSEC(TIMER_INTERVAL_MS));
 
     // Optionally, set a timer to stop sampling after 30 seconds
     //k_timer_start(&ecg_sampling_stop_timer, K_SECONDS(30), K_NO_WAIT);
@@ -592,10 +589,18 @@ static void measure_exit(void *o) {
 static void error_entry(void *o) {
     LOG_INF("Error Entry State");
 
+    k_timer_stop(&heartbeat_timer);
+    k_timer_stop(&battery_blink_timer);
+    k_timer_stop(&hrate_blink_timer);
+    //k_timer_stop(&error_blink_timer);
+
+
     // Blink all LEDs at 50% duty cycle
-    k_timer_start(&heartbeat_timer, K_NO_WAIT, K_MSEC(500));
+    /* k_timer_start(&heartbeat_timer, K_NO_WAIT, K_MSEC(500));
     k_timer_start(&battery_blink_timer, K_NO_WAIT, K_MSEC(500));
     k_timer_start(&hrate_blink_timer, K_NO_WAIT, K_MSEC(500));
+    k_timer_start(&error_blink_timer, K_NO_WAIT, K_MSEC(500)); */
+
     k_timer_start(&error_blink_timer, K_NO_WAIT, K_MSEC(500));
 
     LOG_INF("Started all LED timers in Error State.");
@@ -603,7 +608,6 @@ static void error_entry(void *o) {
     // Notify Error Code via BLE
 
     //error_state = error_code; // Update error state
-    send_error_notification(); // Send error notification via Bluetooth
 
     int ret = send_BT_notification(current_conn, (uint8_t *)&error_code, sizeof(error_code));
     if (ret) {
@@ -628,9 +632,8 @@ static void error_run(void *o)
 }
 
 static void error_exit(void *o) {
-    k_timer_stop(&heartbeat_timer);
-    k_timer_stop(&battery_blink_timer);
-    k_timer_stop(&temp_read_timer);
+
+    k_timer_stop(&error_blink_timer);
     LOG_INF("Exiting Error State");
 }
 
@@ -739,21 +742,48 @@ void clear_button_callback(const struct device *dev, struct gpio_callback *cb, u
         return;
     }
     last_press_time = current_time;
+
+    // Check if LED2 (Heart Rate LED) is blinking
+    if (k_timer_status_get(&hrate_blink_timer) > 0) {
+        // Stop the timer and turn off LED2
+        k_timer_stop(&hrate_blink_timer);
+        gpio_pin_set_dt(&hrate_led, 0);  // Turn off LED2
+        LOG_INF("Heart Rate LED turned off.");
+    } else {
+        // Log a warning if LED2 is not blinking
+        LOG_WRN("Cannot clear LED2: No measurement has been taken.");
+    }
     
     k_event_post(&button_events, CLEAR_BTN_PRESS);
 }
 
 void reset_button_callback(const struct device *dev, struct gpio_callback *cb, uint32_t pins)
 {
-    // Add debounce check if needed
     uint32_t current_time = k_uptime_get_32();
+
+    // Debounce check
     if (current_time - last_press_time < DEBOUNCE_DELAY_MS) {
         return;
     }
     last_press_time = current_time;
-    
+
+    // Reset if in ERROR state
+    if (SMF_CTX(&s_obj)->current == &states[Error]) {
+        LOG_INF("Resetting device from ERROR state to IDLE state.");
+
+        // Clear error events and reset the error code
+        k_event_set(&errors, 0);
+        error_code = 0;
+
+        // Transition back to the IDLE state
+        smf_set_state(SMF_CTX(&s_obj), &states[Idle]);
+    } else {
+        LOG_WRN("Reset button pressed but device is not in ERROR state.");
+    }
+
     k_event_post(&button_events, RESET_BTN_PRESS);
 }
+
 
 void temp_read_callback(struct k_timer *timer_id) {
     extern int32_t temperature_degC;
@@ -775,27 +805,40 @@ void heartbeat_blink_handler(struct k_timer *heartbeat_timer) {
     //LOG_DBG("Heartbeat LED toggled to %s", led_on ? "ON" : "OFF");
 }
 
-void battery_blink_handler(struct k_timer *timer_id) {
+void battery_blink_handler(struct k_timer *battery_blink_timer) {
     static bool battery_led_on = false;
-    const struct gpio_dt_spec battery_led = GPIO_DT_SPEC_GET(DT_ALIAS(battery), gpios);
-
-    if (!device_is_ready(battery_led.port)) {
-        LOG_ERR("Battery LED port not ready");
-        return;
-    }
 
     gpio_pin_set_dt(&battery_led, battery_led_on);
     battery_led_on = !battery_led_on; // Toggle the LED state
     LOG_DBG("Battery LED toggled to %s", battery_led_on ? "ON" : "OFF");
 }
 
-void error_blink_handler(struct k_timer *timer_id) {
+void hrate_blink_handler(struct k_timer *hrate_blink_timer) {
+    static bool led_on = false;
+    const struct gpio_dt_spec *led = &hrate_led;
+
+    // Toggle LED state
+    gpio_pin_set_dt(led, led_on);
+    led_on = !led_on;  // Toggle state
+
+    // Log the toggle state with heart rate info
+    LOG_DBG("Heart Rate LED toggled to %s at %d BPM", led_on ? "ON" : "OFF", average_hr);
+}
+
+void error_blink_handler(struct k_timer *error_blink_timer) {
     static bool led_on = false;
 
+    // Toggle all four LEDs
+    gpio_pin_set_dt(&heartbeat_led, led_on);
+    gpio_pin_set_dt(&battery_led, led_on);
+    gpio_pin_set_dt(&hrate_led, led_on);
     gpio_pin_set_dt(&error_led, led_on);
-    led_on = !led_on;  // Toggle state
-    LOG_DBG("Error LED toggled to %s", led_on ? "ON" : "OFF");
+
+    led_on = !led_on;  // Toggle state for next call
+
+    LOG_DBG("All LEDs toggled to %s in Error State", led_on ? "ON" : "OFF");
 }
+
 void battery_measure_callback(struct k_timer *timer_id) {
     if (SMF_CTX(&s_obj)->current == &states[Idle]) {
         battery_voltage = 0;
@@ -1006,18 +1049,6 @@ void measure_button_callback(const struct device *dev, struct gpio_callback *cb,
 
     // Update the last press time
     last_press_time = current_time;
-}
-
-void hrate_blink_handler(struct k_timer *hrate_blink_timer) {
-    static bool led_on = false;
-    const struct gpio_dt_spec *led = &hrate_led;
-
-    // Toggle LED state
-    gpio_pin_set_dt(led, led_on);
-    led_on = !led_on;  // Toggle state
-
-    // Log the toggle state with heart rate info
-    LOG_DBG("Heart Rate LED toggled to %s at %d BPM", led_on ? "ON" : "OFF", average_hr);
 }
 
 
