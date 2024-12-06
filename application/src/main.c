@@ -34,12 +34,14 @@ LOG_MODULE_REGISTER(main, LOG_LEVEL_DBG);
 
 // ECG configurations
 #define BLINK_TIMER_INTERVAL_MS 500
-#define ECG_SAMPLE_RATE 10 // Sampling rate in Hz
-#define ECG_BUFFER_SIZE (ECG_SAMPLE_RATE * 30) // 30 seconds of data
+#define ECG_SAMPLE_RATE 100 // Sampling rate in Hz
+#define ECG_BUFFER_SIZE (ECG_SAMPLE_RATE * 15) // 15 seconds of data
 #define TIMER_INTERVAL_MS (1000 / ECG_SAMPLE_RATE) // 100 ms for 10 Hz
+#define MIN_RR_INTERVAL_MS 300 // Minimum RR interval in ms
+#define MAX_RR_INTERVAL_MS 2000 // Maximum RR interval in ms
 
-#define R_PEAK_THRESHOLD 2000 // Threshold for R peak detection
-#define ECG_THREAD_STACK_SIZE 8192
+#define R_PEAK_THRESHOLD 250 // Threshold for R peak detection
+#define ECG_THREAD_STACK_SIZE 4096
 #define ECG_THREAD_PRIORITY 2  // Adjust priority as needed
 #define ECG_WORKQUEUE_STACK_SIZE 4096
 #define ECG_WORKQUEUE_PRIORITY 3
@@ -132,9 +134,10 @@ static const struct pwm_dt_spec pwm1 = PWM_DT_SPEC_GET(DT_ALIAS(pwm1));
 int32_t temperature_degC;
 int32_t error_code = 0;  // Global variable to store error codes
 int32_t battery_voltage = 0; // Global variable to store the battery voltage
-atomic_t ecg_index = ATOMIC_INIT(0);
+int ecg_index;
 float blink_frequency, on_time_seconds, pwm_duty, pwm_duty_max;
-int16_t ecg_buffer[ECG_BUFFER_SIZE]; // Global buffer to store ECG data
+static int16_t ecg_buffer[ECG_BUFFER_SIZE];
+//static int16_t buf2[ECG_SAMPLE_BUFFER_SIZE];
 int32_t average_hr = 0; // Global variable to store the average heart rate
 static uint32_t last_press_time = 0; // Variable to store the last press time
 struct k_thread ecg_thread_data;
@@ -176,6 +179,7 @@ void battery_measure_work_handler(struct k_work *work);
 // Forward declaration of the work handler function
 void ecg_sampling_work_handler(struct k_work *work);
 //void ecg_sampling_thread(void *arg1, void *arg2, void *arg3);
+
 
 void setup_ble(int *ret);
 
@@ -489,7 +493,7 @@ static void measure_entry(void *o) {
     LOG_INF("Measure Entry State");
 
     // Reset ECG buffer index atomically
-    atomic_set(&ecg_index, 0);
+    //atomic_set(&ecg_index, 0);
 
     // Start ECG sampling timer (sampling every 10 ms for 30 seconds)
     //k_timer_start(&ecg_sampling_timer, K_NO_WAIT, K_MSEC(10)); // 100 Hz sampling rate
@@ -505,16 +509,7 @@ static void measure_entry(void *o) {
 }
 
 static void measure_run(void *o) {
-    LOG_INF("Measure Run State");
-
-    // Check for error event
-    if (atomic_test_and_clear_bit(&error_events, 0)) {
-        LOG_ERR("Error detected during measurement. Transitioning to ERROR state.");
-        smf_set_state(SMF_CTX(&s_obj), &states[Error]);
-        return;
-    }
-
-    // Check if ECG_SAMPLING_COMPLETE event is set
+    // Wait for the ECG_SAMPLING_COMPLETE event
     if (k_event_wait(&ecg_events, ECG_SAMPLING_COMPLETE, false, K_NO_WAIT) & ECG_SAMPLING_COMPLETE) {
         LOG_INF("ECG Sampling Complete Event Received.");
 
@@ -529,50 +524,49 @@ static void measure_run(void *o) {
         LOG_INF("Temperature: %d °C", temperature_degC);
 
         // Step 2: Calculate Average Heart Rate
-        size_t collected_samples = atomic_get(&ecg_index); // Get the current index as the number of samples collected
+        // ecg_index now contains the number of valid samples
+        size_t collected_samples = ecg_index;
         ret = calculate_average_heart_rate(&vadc_hrate, collected_samples);
         if (ret != 0) {
             LOG_ERR("Failed to calculate heart rate");
             error_code |= ERROR_ADC_INIT;
-            atomic_set_bit(&error_events, 0);
             smf_set_state(SMF_CTX(&s_obj), &states[Error]);
             return;
         }
-        LOG_INF("Average Heart Rate calculated successfully: %d BPM", average_hr);
+        LOG_INF("Average Heart Rate: %d BPM", average_hr);
 
         // Step 3: Set Timer for Heart Rate LED Blink
         if (average_hr > 0) {
-            uint32_t period_ms = 60000 / average_hr;      // Timer period in milliseconds
-            uint32_t on_time_ms = period_ms / 4;         // 25% duty cycle
-
+            uint32_t period_ms = 60000 / average_hr;  // Period based on HR
+            uint32_t on_time_ms = period_ms / 4;      // 25% duty cycle
             k_timer_start(&hrate_blink_timer, K_MSEC(on_time_ms), K_MSEC(period_ms));
-            LOG_INF("Heart Rate LED blink started with %d ms ON time and %d ms period", on_time_ms, period_ms);
+            LOG_INF("Heart Rate LED blinking every %d ms (on %d ms)", period_ms, on_time_ms);
         }
 
         // Step 4: Send BLE Notifications
-        // Send Temperature Notification
-        ret = send_BT_notification(current_conn, (uint8_t *)&temperature_degC, sizeof(temperature_degC));
-        if (ret) {
-            LOG_ERR("Failed to send temperature notification");
-        }
-
         if (current_conn) {
+            ret = send_BT_notification(current_conn, (uint8_t *)&temperature_degC, sizeof(temperature_degC));
+            if (ret) {
+                LOG_ERR("Failed to send temperature notification");
+            }
+
             ret = send_BT_notification(current_conn, (uint8_t *)&average_hr, sizeof(average_hr));
             if (ret) {
-                LOG_ERR("Failed to send heart rate notification (ret = %d)", ret);
+                LOG_ERR("Failed to send heart rate notification");
             } else {
                 LOG_INF("Heart rate notification sent: %d BPM", average_hr);
             }
         } else {
-            LOG_ERR("No active BLE connection. Heart rate notification skipped.");
+            LOG_WRN("No active BLE connection. Notifications skipped.");
         }
 
         // Transition back to IDLE
         smf_set_state(SMF_CTX(&s_obj), &states[Idle]);
     }
 
-    // Else, do nothing and wait for the event
+    // If the event isn't set yet, just wait until ECG sampling completes
 }
+
 
 
 static void measure_exit(void *o) {
@@ -663,47 +657,6 @@ int main(void) {
 
     return 0;
 }
-
-/*
-int main(void) {
-    
-    int ret;
- 
-    ret = bluetooth_init(&bluetooth_callbacks, &remote_service_callbacks);
-  
-    }
-
-    // Initialize state machine context
-    smf_set_initial(SMF_CTX(&s_obj), &states[Init]); 
-
-    while (1) {
-        // State machine started; terminates if a non-zero value is returned
-        int32_t ret = smf_run_state(SMF_CTX(&s_obj));
-        if (ret) {
-            LOG_ERR("State machine error: %d", ret);
-            break;
-        }
-        s_obj.events = k_event_wait(&button_events, ANY_BTN_PRESS, true, K_FOREVER);  
-
-        k_msleep(1);  // sleep for 1 ms for logging purposes
-        
-        // read the temperature every MEASUREMENT_DELAY_MS
-        ret = read_temperature_sensor(temp_sensor, &temperature_degC);
-        if (ret != 0) {
-            LOG_ERR("Problem reading the temperature sensor (%d)", ret);
-            continue;
-            //return ret;
-        }
-
-        LOG_INF("Temperature: %d", temperature_degC);
-
-        k_msleep(MEASUREMENT_DELAY_MS);
-
-    }
-
-    return 0;
-}
-*/
 
 void log_thread(void) {
     while (1) {
@@ -829,7 +782,7 @@ void battery_measure_work_handler(struct k_work *work) {
 
     if (measure_battery_voltage(&vadc_batt, &battery_voltage) == 0) {
         LOG_INF("Battery Voltage: %d mV", battery_voltage);
-        // bluetooth_set_battery_level(battery_voltage); // BLE notification
+        bluetooth_set_battery_level(battery_voltage); // BLE notification
 
         // Adjust LED brightness based on battery level
         adjust_led_brightness(&pwm1, battery_voltage); 
@@ -869,6 +822,8 @@ int measure_battery_voltage(const struct adc_dt_spec *adc, int32_t *voltage_mv) 
     LOG_INF("Battery voltage: %d", raw_adc);
     *voltage_mv = raw_adc;
 }
+    // Adjust LED brightness based on measured voltage
+    adjust_led_brightness(&pwm1, *voltage_mv);
 
     return 0;
 
@@ -904,13 +859,12 @@ void adjust_led_brightness(const struct pwm_dt_spec *pwm1, int32_t voltage_mv) {
 
 void ecg_sampling_work_handler(struct k_work *work) {
     LOG_DBG("ECG sampling work handler called. Current index: %d", ecg_index);
-
-    // Clear the sample buffer
-    //buf2 = 0;
-
-    // Add a delay before adc_read
-    //k_sleep(K_MSEC(10));
-
+    size_t sample_count = ECG_BUFFER_SIZE; // Declare and initialize sample_count
+    if (sample_count > ECG_BUFFER_SIZE) {
+        LOG_ERR("Sample count exceeds buffer size");
+        return;
+    }
+    
     (void)adc_sequence_init_dt(&vadc_hrate, &sequence2);
 
     int ret = adc_read(vadc_hrate.dev, &sequence2);
@@ -918,88 +872,124 @@ void ecg_sampling_work_handler(struct k_work *work) {
         LOG_ERR("Could not initialize ADC sequence: %d", ret);
         k_timer_stop(&ecg_sampling_timer);
         error_code |= ERROR_ADC_INIT;
-        atomic_set_bit(&error_events, 0);
+        //atomic_set_bit(&error_events, 0);
         return;
     }
 
-    // Process all samples read
+    // Convert raw ADC value to millivolts
+
+    int32_t raw_ecg = buf2[0];
+    ret = adc_raw_to_millivolts_dt(&vadc_hrate, &raw_ecg);
+    if (ret < 0) {
+        LOG_ERR("Buffer cannot be converted to mV; returning raw buffer value.");
+        val_mv1 = buf2[0];
+    } else {
+    LOG_INF("ECG raw value: %d", raw_ecg);
+    val_mv1 = raw_ecg;
+}
+
+/*     // Process all samples read
     size_t samples_read = sequence2.buffer_size / sizeof(buf2[0]);
     for (size_t i = 0; i < samples_read && ecg_index < ECG_BUFFER_SIZE; i++) {
         ecg_buffer[ecg_index++] = buf2[i];
-        LOG_DBG("Sample %zu added to buffer. New index: %d", i, ecg_index);
-    }
+        LOG_DBG("Sample %zu added to buffer. ECG buffer: %d ", i, buf2[i]);
+    } */
 
-    if (atomic_get(&ecg_index) >= ECG_BUFFER_SIZE) {
+    if (ecg_index >= ECG_BUFFER_SIZE) {
         k_timer_stop(&ecg_sampling_timer);
-        LOG_INF("ECG sampling complete. Total samples: %d", atomic_get(&ecg_index));
+        LOG_INF("ECG sampling complete. Total samples: %d", &ecg_index);
         k_event_post(&ecg_events, ECG_SAMPLING_COMPLETE); // Post to ECG events
     }
+
 }
 
 void ecg_sampling_callback(struct k_timer *ecg_sampling_timer) {
-    // Only submit work if buffer is not full
+    // If we still have room in the buffer, submit work
     if (ecg_index < ECG_BUFFER_SIZE) {
-        k_work_submit_to_queue(&ecg_workqueue, &ecg_sampling_work);
+        int ret = k_work_submit_to_queue(&ecg_workqueue, &ecg_sampling_work);
+        if (ret != 0) {
+            LOG_ERR("Failed to submit ECG sampling work: %d", ret);
+        }
     } else {
-        k_timer_stop(&ecg_sampling_timer);
-        LOG_INF("Finished ECG sampling");
+        // Already complete, ensure timer is stopped
+        k_timer_stop(ecg_sampling_timer);
     }
 }
+
 
 void apply_moving_average_filter(const int16_t *input, int16_t *output, size_t length, size_t window_size) {
     for (size_t i = 0; i < length; i++) {
         int32_t sum = 0;
         size_t count = 0;
-        for (size_t j = (i >= window_size/2) ? i - window_size/2 : 0;
-             j <= i + window_size/2 && j < length; j++) {
+        size_t start = (i >= window_size / 2) ? (i - window_size / 2) : 0;
+        size_t end = (i + window_size / 2 < length) ? (i + window_size / 2) : (length - 1);
+
+        for (size_t j = start; j <= end; j++) {
             sum += input[j];
             count++;
         }
-        output[i] = sum / count;
+
+        output[i] = (int16_t)(sum / count);
     }
 }
 
-int calculate_average_heart_rate(const struct adc_dt_spec *adc, size_t sample_count) {
 
-    // Ensure ECG sampling is complete
-    if (sample_count < 50) { // Less than 30 seconds of data
-        LOG_ERR("Insufficient ECG data for heart rate calculation");
-        return -1;
+int calculate_average_heart_rate(const struct adc_dt_spec *adc, size_t val_mv1) {
+    // Convert raw ADC values to millivolts
+    int16_t mv_ecg_buffer[ECG_BUFFER_SIZE];
+    for (size_t i = 0; i < 300; i++) {
+        int32_t mv_value;
+        int32_t raw_ecg = val_mv1; // Define and initialize raw_ecg //where does ecg_buffer comes from????? 
+        int ret = adc_raw_to_millivolts_dt(&vadc_hrate, &raw_ecg);
+        if (ret < 0) {
+            LOG_ERR("Millivolt conversion failed: %d", ret);
+            return -1;
+        }
+        mv_ecg_buffer[i] = (int16_t)mv_value;
     }
 
-    // Apply moving average filter
     int16_t filtered_ecg[ECG_BUFFER_SIZE];
-    apply_moving_average_filter(ecg_buffer, filtered_ecg, sample_count, 5);
+    apply_moving_average_filter(mv_ecg_buffer, filtered_ecg, ECG_BUFFER_SIZE, 5);
 
-    size_t r_peak_count = 0;
-    //int16_t threshold = 200; // threshold for R-peak detection
+    // Set threshold in millivolts (e.g., 250 mV)
+    int16_t r_peak_mv_threshold = 200; //you need to change this based on the values you are reading 
 
-    // R-peak detection
-    for (size_t i = 1; i < sample_count - 1; i++) {
-        if (filtered_ecg[i] > hr_config.r_peak_threshold &&
+    // Rest of the heart rate calculation remains similar...
+    uint32_t last_peak_time = 0;
+    uint32_t total_hr = 0;
+    size_t valid_intervals = 0;
+
+    for (size_t i = 2; i < ECG_BUFFER_SIZE - 2; i++) {
+        if (filtered_ecg[i] > r_peak_mv_threshold &&
             filtered_ecg[i] > filtered_ecg[i - 1] &&
             filtered_ecg[i] > filtered_ecg[i + 1]) {
-            r_peak_count++;
-            LOG_DBG("R-peak detected at index %d: %d", i, filtered_ecg[i]);
+
+            uint32_t current_time = (i * 1000U) / ECG_SAMPLE_RATE; // Convert index to ms
+            if (last_peak_time > 0) {
+                uint32_t rr_interval = current_time - last_peak_time;
+                if (rr_interval >= MIN_RR_INTERVAL_MS && rr_interval <= MAX_RR_INTERVAL_MS) {
+                    uint32_t instant_hr = 60000U / rr_interval;
+                    if (instant_hr >= hr_config.min_bpm && instant_hr <= hr_config.max_bpm) {
+                        total_hr += instant_hr;
+                        valid_intervals++;
+                    }
+                }
+            }
+            last_peak_time = current_time;
         }
     }
 
-    // Calculate average BPM
-    int total_time_sec = sample_count / ECG_SAMPLE_RATE;
-    int bpm = (r_peak_count * 60) / total_time_sec;
-    LOG_INF("Calculated BPM: %d", bpm);
-
-    // Assign to global variable
-    average_hr = bpm;
-
-    return 0; // Success
+    if (valid_intervals > 0) {
+        average_hr = total_hr / valid_intervals;
+        LOG_INF("Calculated HR: %d BPM from %d valid intervals", average_hr, valid_intervals);
+        return 0;
+    } 
+    else {
+        LOG_ERR("No valid R-peak intervals detected");
+        return -1;
+    }
 }
 
-/* void ecg_sampling_stop_callback(struct k_timer *ecg_sampling_stop_) {
-    k_timer_stop(&ecg_sampling_timer); // Stop the sampling timer
-    LOG_INF("ECG sampling stopped after 30 seconds.");
-    // You may want to handle any additional cleanup or state transitions here
-} */
 
 void measure_button_callback(const struct device *dev, struct gpio_callback *cb, uint32_t pins) {
     uint32_t current_time = k_uptime_get_32(); // Get current time in milliseconds
