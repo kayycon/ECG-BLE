@@ -296,8 +296,8 @@ static void init_entry(void *o)
 
     // Start the heartbeat timer (1-second period, 50% duty cycle)
 
-    k_timer_start(&heartbeat_timer, K_NO_WAIT, K_SECONDS(1));
-    //k_timer_start(&heartbeat_timer, K_MSEC(BLINK_TIMER_INTERVAL_MS), K_MSEC(BLINK_TIMER_INTERVAL_MS));
+    //k_timer_start(&heartbeat_timer, K_NO_WAIT, K_SECONDS(1));
+    k_timer_start(&heartbeat_timer, K_MSEC(BLINK_TIMER_INTERVAL_MS), K_MSEC(BLINK_TIMER_INTERVAL_MS));
     LOG_INF("Heartbeat timer started.");
     
     // Measure battery voltage at startup
@@ -453,6 +453,15 @@ static void idle_entry(void *o)
 {
     LOG_INF("Idle Entry State");
 
+    // Stop all non-heartbeat LED timers
+    k_timer_stop(&battery_blink_timer);
+    k_timer_stop(&hrate_blink_timer);
+    
+    // Turn off all non-heartbeat LEDs
+    gpio_pin_set_dt(&battery_led, 0);
+    gpio_pin_set_dt(&hrate_led, 0);
+    gpio_pin_set_dt(&error_led, 0);
+
     // Start the battery timer for 1-minute periodic measurements
     k_timer_start(&battery_measure_timer, K_NO_WAIT, K_MINUTES(1));
     LOG_DBG("Battery measurement timer started.");
@@ -592,16 +601,14 @@ static void error_entry(void *o) {
     k_timer_stop(&heartbeat_timer);
     k_timer_stop(&battery_blink_timer);
     k_timer_stop(&hrate_blink_timer);
-    //k_timer_stop(&error_blink_timer);
+    k_timer_stop(&error_blink_timer);
 
 
     // Blink all LEDs at 50% duty cycle
-    /* k_timer_start(&heartbeat_timer, K_NO_WAIT, K_MSEC(500));
+    k_timer_start(&heartbeat_timer, K_NO_WAIT, K_MSEC(500));
     k_timer_start(&battery_blink_timer, K_NO_WAIT, K_MSEC(500));
     k_timer_start(&hrate_blink_timer, K_NO_WAIT, K_MSEC(500));
-    k_timer_start(&error_blink_timer, K_NO_WAIT, K_MSEC(500)); */
-
-    k_timer_start(&error_blink_timer, K_NO_WAIT, K_MSEC(500));
+    k_timer_start(&error_blink_timer, K_NO_WAIT, K_MSEC(500)); 
 
     LOG_INF("Started all LED timers in Error State.");
 
