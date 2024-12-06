@@ -296,9 +296,10 @@ static void init_entry(void *o)
 
     // Start the heartbeat timer (1-second period, 50% duty cycle)
 
-    //k_timer_start(&heartbeat_timer, K_NO_WAIT, K_SECONDS(1));
     k_timer_start(&heartbeat_timer, K_MSEC(BLINK_TIMER_INTERVAL_MS), K_MSEC(BLINK_TIMER_INTERVAL_MS));
     LOG_INF("Heartbeat timer started.");
+
+    k_timer_start(&battery_blink_timer, K_NO_WAIT, K_MSEC(500));  // 500ms interval
     
     // Measure battery voltage at startup
     //CONFIGURE//INITILAISE//READ
@@ -813,11 +814,26 @@ void heartbeat_blink_handler(struct k_timer *heartbeat_timer) {
 }
 
 void battery_blink_handler(struct k_timer *battery_blink_timer) {
-    static bool battery_led_on = false;
-
-    gpio_pin_set_dt(&battery_led, battery_led_on);
-    battery_led_on = !battery_led_on; // Toggle the LED state
-    LOG_DBG("Battery LED toggled to %s", battery_led_on ? "ON" : "OFF");
+    int32_t voltage_mv;
+    int battery_percentage;
+    
+    if (measure_battery_voltage(&vadc_batt, &voltage_mv) == 0) {
+        battery_percentage = calculate_battery_percentage(voltage_mv);
+        
+        if (battery_percentage > 75) {
+            gpio_pin_set_dt(&battery_led, 1);  // Solid on
+        } else if (battery_percentage > 50) {
+            gpio_pin_toggle_dt(&battery_led);  // Blink at 1 Hz (assuming timer interval is 500ms)
+        } else if (battery_percentage > 25) {
+            static int count = 0;
+            if (count++ % 2 == 0) gpio_pin_toggle_dt(&battery_led);  // Blink at 0.5 Hz
+        } else {
+            static int count = 0;
+            if (count++ % 4 == 0) gpio_pin_toggle_dt(&battery_led);  // Blink at 0.25 Hz
+        }
+        
+        LOG_INF("Battery: %d%% (%d mV)", battery_percentage, voltage_mv);
+    }
 }
 
 void hrate_blink_handler(struct k_timer *hrate_blink_timer) {
@@ -905,6 +921,19 @@ int measure_battery_voltage(const struct adc_dt_spec *adc, int32_t *voltage_mv) 
 
     // How do i pass this voltage_mv to the adjust_led_brightness function?
 
+}
+
+int calculate_battery_percentage(int32_t voltage_mv) {
+    const int32_t MIN_BATTERY_MV = 0;
+    const int32_t MAX_BATTERY_MV = 3700;
+
+    if (voltage_mv >= MAX_BATTERY_MV) {
+        return 100;
+    } else if (voltage_mv <= MIN_BATTERY_MV) {
+        return 0;
+    } else {
+        return (voltage_mv * 100) / MAX_BATTERY_MV;
+    }
 }
 
 void adjust_led_brightness(const struct pwm_dt_spec *pwm1, int32_t voltage_mv) {
