@@ -20,7 +20,7 @@ LOG_MODULE_REGISTER(main, LOG_LEVEL_DBG);
 
 // Constants
 #define MEASUREMENT_DELAY_MS 1000
-//#define DEBOUNCE_DELAY_MS 20 // Debounce delay in milliseconds
+#define DEBOUNCE_DELAY_MS 20 // Debounce delay in milliseconds
 
 // Thread stack sizes and priorities
 #define LOG_THREAD_STACK_SIZE 1024     // Define the size of the thread stack
@@ -623,7 +623,7 @@ static void error_run(void *o)
         error_code = 0;
 
         // Transition back to the Init state to reinitialize
-        smf_set_state(SMF_CTX(&s_obj), &states[Idle]);
+        smf_set_state(SMF_CTX(&s_obj), &states[Init]);
     }
 }
 
@@ -733,11 +733,25 @@ K_THREAD_DEFINE(error_thread_id, ERROR_THREAD_STACK_SIZE, error_thread, NULL, NU
 // Define functions
 void clear_button_callback(const struct device *dev, struct gpio_callback *cb, uint32_t pins)
 {
+    // Add debounce check if needed
+    uint32_t current_time = k_uptime_get_32();
+    if (current_time - last_press_time < DEBOUNCE_DELAY_MS) {
+        return;
+    }
+    last_press_time = current_time;
+    
     k_event_post(&button_events, CLEAR_BTN_PRESS);
 }
 
 void reset_button_callback(const struct device *dev, struct gpio_callback *cb, uint32_t pins)
 {
+    // Add debounce check if needed
+    uint32_t current_time = k_uptime_get_32();
+    if (current_time - last_press_time < DEBOUNCE_DELAY_MS) {
+        return;
+    }
+    last_press_time = current_time;
+    
     k_event_post(&button_events, RESET_BTN_PRESS);
 }
 
