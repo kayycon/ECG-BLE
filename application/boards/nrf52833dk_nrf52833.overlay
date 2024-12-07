@@ -13,17 +13,16 @@
         resetbutton = &button2;  // Reset button corresponds to SW3 on the board
 
         // ADC channel aliases
-
-        vadcbatt = &vadcbatt;     // ADC channel 0; measures battery level (P0.02)
-        vadchr = &vadchr;  // ADC channel 2 does a differential measurement on ECG signal (P0.04 and P0.05)
-
+        temp = &temp_sensor;
+        vadcbatt = &vadc1;     // ADC channel 1; measures battery level (P0.03)
+        vadchr = &vadc2;  // ADC channel 2 does a differential measurement on ECG signal (P0.04 and P0.05)
 
         // PWM channel aliases
         pwm1 = &pwmch1;
     };
 
 zephyr,user {
-        io-channels = <&adc 0>, <&adc 2>;
+        io-channels = <&adc 1>, <&adc 2>;
 };
 
 pwm {
@@ -40,18 +39,18 @@ pwm {
     #address-cells = <1>;
     #size-cells = <0>;
 
-    vadcbatt: channel@0 {
-        reg = <0>; // Channel number 0
+    vadc1: channel@1 {
+        reg = <1>; // Channel number 0
         zephyr,reference = "ADC_REF_INTERNAL"; // Internal reference (0.6)
         zephyr,gain = "ADC_GAIN_1_5"; // Gain 1/5
         zephyr,acquisition-time = <ADC_ACQ_TIME(ADC_ACQ_TIME_MICROSECONDS, 40)>;  // Acquisition time in microseconds
-        zephyr,input-positive = <NRF_SAADC_AIN0>; // Input pin P0.02
-        zephyr,resolution = <12>; // 10-bit resolution
+        zephyr,input-positive = <NRF_SAADC_AIN1>; // Input pin P0.
+        zephyr,resolution = <8>; // 10-bit resolution
         //zephyr,oversampling = <4>;
         //zephyr,vref-mv = <750>; 
     };
 
-    vadchr: channel@2 {
+    vadc2: channel@2 {
         reg = <2>; // Channel number 2
         zephyr,reference = "ADC_REF_INTERNAL"; // Internal reference (0.6)
         zephyr,gain = "ADC_GAIN_1_5"; // Gain 1/5
@@ -99,7 +98,7 @@ SDA: P0.26
 */
 
 &i2c0 {
-    mcp9808@18{
+    temp_sensor: mcp9808@18{
         compatible = "microchip,mcp9808"; // Device compatible
         reg = <0x18>; // Device address
         status = "okay"; // Enable the device

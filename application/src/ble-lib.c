@@ -46,12 +46,12 @@ BT_GATT_SERVICE_DEFINE(remote_srv,
     BT_GATT_CHARACTERISTIC(&remote_temperature_data_uuid.uuid,
                     BT_GATT_CHRC_READ | BT_GATT_CHRC_NOTIFY,
                     BT_GATT_PERM_READ,
-                    read_temperature_data_cb, NULL, NULL),
+                    read_temperature_data_cb, NULL, &temperature_degC),
     BT_GATT_CCC(ccc_cfg_changed_cb, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
     BT_GATT_CHARACTERISTIC(&remote_err_uuid.uuid,
                     BT_GATT_CHRC_READ | BT_GATT_CHRC_NOTIFY,
                     BT_GATT_PERM_WRITE | BT_GATT_PERM_READ,
-                    read_error_cb, NULL, NULL),
+                    read_error_cb, NULL, &errors.events),
     BT_GATT_CCC(ccc_cfg_changed_cb, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
     BT_GATT_CHARACTERISTIC(&remote_msg_uuid.uuid,
                     BT_GATT_CHRC_WRITE_WITHOUT_RESP,
@@ -188,7 +188,7 @@ uint8_t bluetooth_get_battery_level(void) {
 void bluetooth_set_battery_level(int32_t raw_mV) {
     LOG_DBG("Raw Battery: %d mV", raw_mV);
     
-    float normalized_level = (float)raw_mV / NOMINAL_BATTERY_VOLT_MV;
+    float normalized_level = (float)raw_mV * 100 / NOMINAL_BATTERY_VOLT_MV; //100
     
     LOG_INF("Normalized Battery Level: %lf", (double)normalized_level);
     int err = bt_bas_set_battery_level((int)normalized_level);
