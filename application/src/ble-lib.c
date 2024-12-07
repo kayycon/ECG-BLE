@@ -16,6 +16,7 @@ extern struct k_event errors; // errors characteristic will read from this varia
 
 enum bt_data_notifications_enabled notifications_enabled;
 
+
 /* Advertising data */
 static const struct bt_data ad[] = {
     BT_DATA_BYTES(BT_DATA_FLAGS, (BT_LE_AD_GENERAL | BT_LE_AD_NO_BREDR)),
@@ -148,6 +149,40 @@ void bt_ready(int ret) {
     // release the thread once initialized
     k_sem_give(&bt_init_ok);
 }
+
+static int settings_runtime_load(void)
+{
+#if defined(CONFIG_BT_DIS_SETTINGS)
+	settings_runtime_set("bt/dis/model",
+			     CONFIG_BT_DIS_MODEL,
+			     sizeof(CONFIG_BT_DIS_MODEL));
+	settings_runtime_set("bt/dis/manuf",
+			     CONFIG_BT_DIS_MANUF,
+			     sizeof(CONFIG_BT_DIS_MANUF));
+#if defined(CONFIG_BT_DIS_SERIAL_NUMBER)
+	settings_runtime_set("bt/dis/serial",
+			     CONFIG_BT_DIS_SERIAL_NUMBER_STR,
+			     sizeof(CONFIG_BT_DIS_SERIAL_NUMBER_STR));
+#endif
+#if defined(CONFIG_BT_DIS_SW_REV)
+	settings_runtime_set("bt/dis/sw",
+			     CONFIG_BT_DIS_SW_REV_STR,
+			     sizeof(CONFIG_BT_DIS_SW_REV_STR));
+#endif
+#if defined(CONFIG_BT_DIS_FW_REV)
+	settings_runtime_set("bt/dis/fw",
+			     CONFIG_BT_DIS_FW_REV_STR,
+			     sizeof(CONFIG_BT_DIS_FW_REV_STR));
+#endif
+#if defined(CONFIG_BT_DIS_HW_REV)
+	settings_runtime_set("bt/dis/hw",
+			     CONFIG_BT_DIS_HW_REV_STR,
+			     sizeof(CONFIG_BT_DIS_HW_REV_STR));
+#endif
+#endif
+	return 0;
+}
+
 
 int bluetooth_init(struct bt_conn_cb *bt_cb, struct bt_remote_srv_cb *remote_cb) {
     LOG_INF("Initializing Bluetooth");

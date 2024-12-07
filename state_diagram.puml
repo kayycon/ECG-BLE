@@ -5,9 +5,9 @@
 state INIT {
     init_entry: Perform initialization
     init_entry --> init_run
-    init_run: Initialize peripherals (GPIO, ADC, I2C, BLE, PWM)
+    init_run: Initialize: Buttons(1,2,3,4), LEDs(1,2,3,4), ADC(1,2), PWM(1), BLE, Temp sensor
     init_run --> init_exit
-    init_exit: Start heartbeat timer and transition to IDLE
+    init_exit: Start heartbeat timer & transition to IDLE
 }
 
 INIT --> IDLE : Successful initialization
@@ -17,6 +17,7 @@ state IDLE {
     idle_entry: Start battery monitoring timer (1 min)
     idle_entry --> idle_run
     idle_run: Wait for button events
+    idle_run --> MEASURING : Measure AIN0 at 1 min intervals; modulate LED1 brightness linearly as per the Voltage
     idle_run --> MEASURING : BUTTON1 pressed (start measurement)
     idle_run --> ERROR : Error event
     idle_run --> IDLE : BUTTON3 pressed (reset from ERROR)
@@ -26,14 +27,14 @@ state IDLE {
 state MEASURING {
     measure_entry: Start measurements
     measure_entry --> measure_run
-    measure_run: Perform temperature and ECG measurements\nCalculate average heart rate\nNotify BLE (temperature, heart rate)
+    measure_run: Perform temperature and ECG measurements\nCalculate average heart rate from ADC2 from 30s of data\nNotify BLE (temperature, heart rate)
     measure_run --> IDLE : Measurement complete
     measure_run --> ERROR : Error detected
     measure_exit: Stop measurement-specific timers
 }
 
 state ERROR {
-    error_entry: Blink all LEDs (50% duty cycle) and send BLE notification
+    error_entry: Blink all LEDs blink in phase at 50% duty cycle and send BLE notification of error code
     error_entry --> error_run
     error_run: Wait for BUTTON3 to reset
     error_run --> IDLE : BUTTON3 pressed (reset)
