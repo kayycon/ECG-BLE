@@ -67,31 +67,6 @@ Generate a detailed state diagram that all states, events and actions for your f
 
 Complete the testing analysis described in [testing/final_project.ipynb](testing/final_project.ipynb) to verify the accuracy of your firmware.
 
-## Extra Credit
-
-* :star: Implement signal processing to get the ECG measurement to work on a noisy signal with low-frequency "DC drift".  This will be graded based on the quality of the implementation and the ability to accurately measure the average heart rate.
-
-## Grading
-
-* This final project is worth 75% of your grade.  Absolutely no late submissions will be accepted.
-* Git version control will be graded based on best practices.
-* Firmware will be graded based on all best practices taught throughout the semester.
-* Code organization and coding best practices will be graded.
-* State diagram will be graded based on completeness, accuracy and ease of interpretation.
-* Testing and analysis technical report will be graded based on presentation, completeness, and accuracy.
-* Your demo will be graded based on the functionality of your device and your ability to answer questions about your firmware.
-* Extra credit will only be considered after all required functionality is implemented and working correctly.  
-  * Completing the extra credit will forgive some/all late penalties for labs this semester.  (Applies to all team members.)
-  * If you do not have any late penalties, then the extra credit will be added to your final project grade, including going over 100%.
-
-## What to Submit
-
-* Make sure that all of your development branches have been merged into `main` in your Team Leader's repository.
-* Create an annotated tag called `v1.0.0` to mark the commit that you want to be graded.  If you fix any bugs after creating this tag, you can create another tag called `v1.0.1`, etc.  Your latest tag will be the one that is graded.
-* Create an Issue in your repository with the title "Final Project Submission", and assign it to Dr. Palmeri.
-* **All repositories will be cloned at the due date/time for grading.  Absolutely no changes will be accepted after this time.**
-* **Your team must schedule a time to do a live demo of your device with Dr. Palmeri before the due date of this assignment.  Your team will be asked questions during this demo.**
-
 ## Resources
 
 ### Heart Rate Service (GATT)
