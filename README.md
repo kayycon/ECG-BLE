@@ -59,13 +59,11 @@ Your device can connect via BLE to a mobile app called [nRF Connect](https://www
 
 ## State Diagram
 
-Generate a detailed state diagram that all states, events and actions for your firmware.  A starter diagram is provided in the `state_diagram.puml` file, along with its rendering below.  You should add states, events and actions as needed to fully describe the functionality of your firmware.
-
 ![State Diagram](state_diagram.png)
 
 ## Testing & Verification
 
-Complete the testing analysis described in [testing/final_project.ipynb](testing/final_project.ipynb) to verify the accuracy of your firmware.
+Complete testing analysis described in [testing/final_project.ipynb](testing/final_project.ipynb) to verify the accuracy of your firmware.
 
 ## Resources
 
