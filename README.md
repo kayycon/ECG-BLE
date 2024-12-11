@@ -1,27 +1,16 @@
-# Final Project: ECG & Temperature Monitor with BLE
+# ECG & Temperature Monitor with BLE Project Overview
 
-**You are allowed to work in groups of up to 3 students for this final project.**
+**Project Description.**
 
-* Have one person (referred to as the Team Leader below) in your group fork this repository into their userspace.
-* All other team members should fork the Team Leader's repository.
-* Each team member should add Dr. Palmeri and all of the class teaching assistants as Maintainers to their repository.
-* Questions should be asked exclusively through GitLab Issues.
-* All team members should contribute to the final project, and this equal contribution should be reflected through the git history.
-* All team members should create Merge Requests to the Team Leader's repository for their contributions throughout the project.
-* If you work as a team, the only way for everyone to get credit is through git commits and merge requests that reflect individual user contributions.  **You will not be able to say "we worked on this together" without git commits and merge requests to back it up to receive credit for working on the project.**
-* Inequalities in contributions will be reflected in the **individual** final project grades.
-* :scream: If collaborating with other students in the class stresses you out, or you worry about effort inequity, then I would recommend working alone.
+*The ECG & Temperature Monitor with BLE is a Bluetooth-enabled device designed to measure ECG signals, body temperature, and simulate battery voltage monitoring. The device uses various sensors, microcontrollers, and LEDs to display real-time data and transmit results via Bluetooth Low Energy (BLE) to a mobile application.
 
-## Git Version Control Management
+## Project Goals
 
-* Use best version control practices throughout the development of your firmware.
-* Use branches for development and merge into your `main` branch when the code is stable.
-* Commit often with meaningful commit messages.
-* Merge Requests to the Team Leader's repository should be made when focused, but functional, changes are complete.
-* Using libraries will help avoid conflicts in `main.c` that will occur if everyone writes code in the same file.
-* Be careful collaborating with Jupyter notebooks; they don't play well with merges.  You may want each team member to perform testing in separate notebooks that you manually combine at the end of the project, or you may divide up the labor of testing and analysis between team members.
-
-## Best Coding Practices
+* Implement an embedded system that measures ECG signals and temperature.
+* Use a BLE-enabled microcontroller for data transmission.
+* Display results visually using LEDs.
+  
+## Project Goals
 
 * Use best coding practices throughout the development of your firmware.
 * Functions should be short and do one thing.  They should return an exit code that is checked in the calling function, indicating success or failure.
@@ -33,14 +22,14 @@
 
 ## Firmware Functional Specifications
 
-* Write all firmware using the state machine framework.
-  * Do all device initialization in an `INIT` state.
-  * Have an `IDLE` state when the device isn't making any measurements.
-  * Have an `ERROR` state if any error exit codes are returned from any functions.
-    * All 4 LEDs should blink at a 50% duty cycle (`ON:OFF` time), in-phase with each other, in the `ERROR` state.
-    * An error condition should post an error-related event that causes the device to enter the `ERROR` state.
-    * The error code should specify the error condition that caused the device to enter the `ERROR` state.  For example, you may choose to have a bit array that can capture multiple error conditions.
-    * A BLE notification should be sent with the error code (see BLE custom service/characteristic below).
+* Device Initialization:
+  * Initializes sensors, LEDs, and BLE services during the INIT state.
+* Measurement & Notifications:
+
+  * ECG Measurement: Reads ECG signals from a function generator and calculates average heart rate (40-200 BPM).
+  * Temperature Measurement: Reads temperature using the MPR9808 sensor.
+  * Battery Monitoring: Measures voltage (0-3.7V) using AIN0, simulating a battery level.
+
   * Implement states of your choosing for the following measurements, calculations and BLE communications.
 * Have a heartbeat `LED0` that blinks every 1 second with a 50% duty cycle (`ON:OFF` time) in all states.
 * Implement functionality to measure a battery voltage (0-3.7 V) using `AIN0`:
